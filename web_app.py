@@ -130,14 +130,26 @@ st.caption("Compare prices from Star Tech & Ryans instantly.")
 
 # Handle URL parameters
 query_params = st.query_params
-default_budget = 30000
+default_budget = 30000 # Default start
 
 if "budget" in query_params:
     try:
-        default_budget = int(query_params["budget"])
+        url_value = int(query_params["budget"])
+        
+        # --- THE FIX: Clamp the value between Min and Max ---
+        if url_value < 15000:
+            default_budget = 15000
+        elif url_value > 500000:
+            default_budget = 500000
+        else:
+            default_budget = url_value
+            
         st.toast(f"Build loaded for {default_budget} BDT!", icon="✅")
     except:
-        pass
+        pass # If url is garbage (e.g. ?budget=abc), ignore it
+
+# Now this will never crash
+budget_input = st.number_input("💰 What is your Budget (BDT)?", 15000, 500000, 1000, default_budget)
 
 # Input
 budget_input = st.number_input("💰 What is your Budget (BDT)?", 15000, 500000, 1000, default_budget)
