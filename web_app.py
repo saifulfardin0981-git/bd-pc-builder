@@ -40,14 +40,12 @@ def get_cheapest_item(cursor, table):
 def show_share_menu(link):
     st.write("Choose a platform to share your PC build:")
     
-    # 1. Copy Link Section
     st.text_input("Copy Link manually:", value=link)
     
-    # 2. Social Buttons Grid
     col1, col2 = st.columns(2)
     col3, col4 = st.columns(2)
     
-    # Define styles for buttons
+    # CSS for nice buttons
     btn_style = """
         <style>
         .share-btn {
@@ -65,28 +63,21 @@ def show_share_menu(link):
     """
     st.markdown(btn_style, unsafe_allow_html=True)
 
-    # Facebook (Blue)
     with col1:
         fb_url = f"https://www.facebook.com/sharer/sharer.php?u={link}"
         st.markdown(f'<a href="{fb_url}" target="_blank" class="share-btn" style="background-color: #1877F2;">📘 Facebook</a>', unsafe_allow_html=True)
 
-    # WhatsApp (Green)
     with col2:
         wa_url = f"https://api.whatsapp.com/send?text=Check%20out%20this%20PC:%20{link}"
         st.markdown(f'<a href="{wa_url}" target="_blank" class="share-btn" style="background-color: #25D366;">💬 WhatsApp</a>', unsafe_allow_html=True)
     
-    # Messenger (Blue-Purple)
     with col3:
-        # Note: Messenger sharing often requires mobile app or FB ID, using generic FB share as fallback/redirect
         mess_url = f"fb-messenger://share/?link={link}"
         st.markdown(f'<a href="{mess_url}" target="_blank" class="share-btn" style="background-color: #0084FF;">⚡ Messenger</a>', unsafe_allow_html=True)
 
-    # Email (Grey)
     with col4:
         email_url = f"mailto:?subject=My PC Build&body=Check out this build: {link}"
         st.markdown(f'<a href="{email_url}" class="share-btn" style="background-color: #555;">✉️ Email</a>', unsafe_allow_html=True)
-        
-    st.caption("Note: Messenger link works best on mobile.")
 
 # --- MAIN APP LOGIC ---
 def generate_pc_build(budget):
@@ -97,7 +88,6 @@ def generate_pc_build(budget):
     remaining = budget
     parts = {}
     
-    # LOGIC:
     cpu = get_best_item(cursor, "processors", budget * 0.30) or get_cheapest_item(cursor, "processors")
     if cpu: remaining -= cpu['price']; parts['CPU'] = cpu
     
@@ -128,15 +118,15 @@ def generate_pc_build(budget):
 st.title("🖥️ BD PC Builder AI")
 st.caption("Compare prices from Star Tech & Ryans instantly.")
 
-# Handle URL parameters
+# --- SAFE URL HANDLING (THE FIX) ---
 query_params = st.query_params
-default_budget = 30000 # Default start
+default_budget = 30000
 
 if "budget" in query_params:
     try:
         url_value = int(query_params["budget"])
         
-        # --- THE FIX: Clamp the value between Min and Max ---
+        # This logic prevents the crash!
         if url_value < 15000:
             default_budget = 15000
         elif url_value > 500000:
@@ -146,10 +136,7 @@ if "budget" in query_params:
             
         st.toast(f"Build loaded for {default_budget} BDT!", icon="✅")
     except:
-        pass # If url is garbage (e.g. ?budget=abc), ignore it
-
-# Now this will never crash
-budget_input = st.number_input("💰 What is your Budget (BDT)?", 15000, 500000, 1000, default_budget)
+        pass
 
 # Input
 budget_input = st.number_input("💰 What is your Budget (BDT)?", 15000, 500000, 1000, default_budget)
@@ -163,10 +150,9 @@ if st.button("🚀 Build PC", type="primary"):
         st.divider()
         st.success(f"✅ Build Complete! Total: **{total_cost} BDT**")
         
-        # --- THE SINGLE SHARE BUTTON ---
+        # --- SHARE BUTTON ---
         share_url = f"https://bd-pc-builder.streamlit.app/?budget={budget_input}"
         
-        # This button triggers the popup
         if st.button("📤 Share this Build"):
             show_share_menu(share_url)
 
