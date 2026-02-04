@@ -139,7 +139,7 @@ if st.button("🚀 Build PC", type="primary"):
                 st.divider()
                 
         if saved > 0:
-            st.warning(f"💵 Unused Budget: {saved} BDT")
+            st.warning(f"💵 Money Saved: {saved} BDT")
             
     else:
         st.error("Could not connect to database.")
