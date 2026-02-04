@@ -114,12 +114,53 @@ if st.button("🚀 Build PC", type="primary"):
         st.divider()
         st.success(f"✅ Build Complete! Total: **{total_cost} BDT**")
         
-        # --- SHARE SECTION ---
-        # Generate the shareable link
-        # Note: In local mode, this might show 'localhost'. On cloud, it shows real URL.
+        # --- SHARE SECTION (NEW) ---
         share_url = f"https://bd-pc-builder.streamlit.app/?budget={budget_input}"
-        st.info("👇 **Share this build with friends:**")
-        st.code(share_url, language="text")
+        
+        st.markdown("### 👇 Share this Build")
+        
+        # Create columns for side-by-side buttons
+        share_col1, share_col2 = st.columns(2)
+        
+        with share_col1:
+            # Facebook Share Link (Standard Blue)
+            fb_link = f"https://www.facebook.com/sharer/sharer.php?u={share_url}"
+            st.markdown(f'''
+                <a href="{fb_link}" target="_blank">
+                    <button style="
+                        background-color: #1877F2; 
+                        color: white; 
+                        border: none; 
+                        padding: 10px 20px; 
+                        border-radius: 8px; 
+                        font-weight: bold;
+                        width: 100%;
+                        cursor: pointer;">
+                        📘 Share on Facebook
+                    </button>
+                </a>
+            ''', unsafe_allow_html=True)
+
+        with share_col2:
+            # WhatsApp Share Link (Standard Green)
+            wa_link = f"https://api.whatsapp.com/send?text=Check%20out%20this%20PC%20Build%20I%20created:%20{share_url}"
+            st.markdown(f'''
+                <a href="{wa_link}" target="_blank">
+                    <button style="
+                        background-color: #25D366; 
+                        color: white; 
+                        border: none; 
+                        padding: 10px 20px; 
+                        border-radius: 8px; 
+                        font-weight: bold;
+                        width: 100%;
+                        cursor: pointer;">
+                        💬 Share on WhatsApp
+                    </button>
+                </a>
+            ''', unsafe_allow_html=True)
+            
+        st.caption(f"Or copy link: `{share_url}`")
 
         # --- PARTS LIST ---
         for part_type, item in parts.items():
