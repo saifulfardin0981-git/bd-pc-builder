@@ -1,16 +1,25 @@
 import streamlit as st
 import sqlite3
 
-# --- SETUP PAGE CONFIG ---
-st.set_page_config(page_title="BD PC Builder", page_icon="🖥️", layout="centered")
+# --- PAGE SETUP ---
+st.set_page_config(
+    page_title="BD PC Builder", 
+    page_icon="🖥️", 
+    layout="centered",
+    initial_sidebar_state="collapsed"
+)
 
 # --- DATABASE CONNECTION ---
 def get_db_connection():
-    conn = sqlite3.connect('tech_data.db')
-    conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        conn = sqlite3.connect('tech_data.db')
+        conn.row_factory = sqlite3.Row
+        return conn
+    except Exception as e:
+        st.error(f"Database Error: {e}")
+        return None
 
-# --- LOGIC (Same as your API) ---
+# --- BUILD LOGIC (Same as before) ---
 def get_best_item(cursor, table, max_price, spec_constraint=None):
     query = f"SELECT * FROM {table} WHERE price <= ? AND price > 0"
     params = [max_price]
@@ -26,73 +35,111 @@ def get_cheapest_item(cursor, table):
     cursor.execute(query)
     return cursor.fetchone()
 
-# --- THE UI CODE ---
-st.title("🖥️ BD PC Builder AI")
-st.write("Enter your budget, and we will build the best PC for you using live market prices from Bangladesh.")
-
-# 1. Input Section
-budget = st.number_input("💰 What is your Budget (BDT)?", min_value=15000, max_value=500000, step=1000, value=30000)
-
-if st.button("🚀 Build My PC"):
+def generate_pc_build(budget):
     conn = get_db_connection()
+    if not conn: return None, 0, 0
+    
     cursor = conn.cursor()
-    
-    st.divider()
-    
-    # --- LOGIC COPY ---
     remaining = budget
     parts = {}
     
-    # Allocation Strategy
+    # 1. CPU (30%)
     cpu = get_best_item(cursor, "processors", budget * 0.30) or get_cheapest_item(cursor, "processors")
     if cpu: remaining -= cpu['price']; parts['CPU'] = cpu
-        
+    
+    # 2. Motherboard (20%)
     mobo = get_best_item(cursor, "motherboards", budget * 0.20) or get_cheapest_item(cursor, "motherboards")
     if mobo: remaining -= mobo['price']; parts['Motherboard'] = mobo
-        
+    
+    # 3. RAM (10%)
     ram = get_best_item(cursor, "rams", budget * 0.10, "DDR4") or get_cheapest_item(cursor, "rams")
     if ram: remaining -= ram['price']; parts['RAM'] = ram
-        
+    
+    # 4. Storage (10%)
     ssd = get_best_item(cursor, "ssds", budget * 0.10) or get_cheapest_item(cursor, "ssds")
     if ssd: remaining -= ssd['price']; parts['Storage'] = ssd
 
+    # 5. PSU (10%)
     psu = get_best_item(cursor, "psus", budget * 0.10) or get_cheapest_item(cursor, "psus")
     if psu: remaining -= psu['price']; parts['Power Supply'] = psu
-        
+    
+    # 6. Casing (Fixed ~3000)
     casing = get_best_item(cursor, "casings", 3000) or get_cheapest_item(cursor, "casings")
     if casing: remaining -= casing['price']; parts['Casing'] = casing
 
-    # GPU gets the rest
+    # 7. GPU (Remaining Cash > 5k)
     if remaining > 5000:
         gpu = get_best_item(cursor, "gpus", remaining)
         if gpu: remaining -= gpu['price']; parts['Graphics Card'] = gpu
     
     conn.close()
-
-    # --- DISPLAY RESULTS ---
+    
     total_cost = sum(p['price'] for p in parts.values())
+    return parts, total_cost, remaining
+
+# --- THE APP UI ---
+st.title("🖥️ BD PC Builder AI")
+st.caption("Compare prices from Star Tech & Ryans instantly.")
+
+# 1. CHECK URL FOR SHARED BUDGET
+# st.query_params returns a dictionary-like object of the URL parameters
+query_params = st.query_params
+default_budget = 30000
+
+if "budget" in query_params:
+    try:
+        # If someone sent a link like ?budget=50000, use that number
+        default_budget = int(query_params["budget"])
+        st.toast(f"Build loaded for {default_budget} BDT!", icon="✅")
+    except:
+        pass
+
+# 2. INPUT SECTION
+budget_input = st.number_input(
+    "💰 What is your Budget (BDT)?", 
+    min_value=15000, 
+    max_value=500000, 
+    step=1000, 
+    value=default_budget
+)
+
+# 3. BUILD BUTTON
+if st.button("🚀 Build PC", type="primary"):
+    # Update URL so user can copy it immediately
+    st.query_params["budget"] = budget_input
     
-    st.success(f"✅ Build Complete! Total Cost: **{total_cost} BDT**")
+    parts, total_cost, saved = generate_pc_build(budget_input)
     
-    # Show parts in a nice list
-    for part_type, item in parts.items():
-        with st.container():
-            col1, col2 = st.columns([3, 1])
-            col1.markdown(f"**{part_type}**")
-            col1.text(item['name'])
-            col2.markdown(f"**{item['price']} ৳**")
-            
-            # --- AFFILIATE LINK LOGIC ---
-            if item['url']:
-                # 1. Take the original link
-                # 2. Add your ID to the end (e.g. ?ref=samiul)
-                # CHANGE 'YOUR_ID' to your real Star Tech username later!
-                affiliate_link = f"{item['url']}?ref=YOUR_ID"
+    if parts:
+        st.divider()
+        st.success(f"✅ Build Complete! Total: **{total_cost} BDT**")
+        
+        # --- SHARE SECTION ---
+        # Generate the shareable link
+        # Note: In local mode, this might show 'localhost'. On cloud, it shows real URL.
+        share_url = f"https://bd-pc-builder.streamlit.app/?budget={budget_input}"
+        st.info("👇 **Share this build with friends:**")
+        st.code(share_url, language="text")
+
+        # --- PARTS LIST ---
+        for part_type, item in parts.items():
+            with st.container():
+                col1, col2 = st.columns([3, 1])
                 
-                # 3. Show a nice button
-                col2.link_button("🛒 Buy Now", affiliate_link)
+                # Left Column: Name & Type
+                col1.markdown(f"**{part_type}**")
+                col1.caption(item['name'])
+                
+                # Right Column: Price & Button
+                col2.markdown(f"**{item['price']} ৳**")
+                if item['url']:
+                    affiliate_link = f"{item['url']}?ref=YOUR_ID"
+                    col2.link_button("🛒 Buy", affiliate_link)
+                
+                st.divider()
+                
+        if saved > 0:
+            st.warning(f"💵 Unused Budget: {saved} BDT")
             
-            st.divider()
-            
-    if remaining > 0:
-        st.info(f"💵 Money Saved: {remaining} BDT")
+    else:
+        st.error("Could not connect to database.")
