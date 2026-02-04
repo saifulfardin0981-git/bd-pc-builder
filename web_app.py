@@ -138,8 +138,29 @@ if "budget" in query_params:
     except:
         pass
 
-# Input
-budget_input = st.number_input("💰 What is your Budget (BDT)?", 15000, 500000, 1000, default_budget)
+# --- SAFE URL HANDLING (DEBUGGED VERSION) ---
+query_params = st.query_params
+raw_budget = 30000 # Start with a safe default
+
+# 1. Try to get value from URL
+if "budget" in query_params:
+    try:
+        raw_budget = int(query_params["budget"])
+    except:
+        pass # If error, keep it 30000
+
+# 2. FORCE the value to be safe using Math
+# This ensures it is NEVER below 15000 or above 500000
+safe_budget = max(15000, min(500000, raw_budget))
+
+# 3. Create the input using the SAFE value
+budget_input = st.number_input(
+    "💰 What is your Budget (BDT)?", 
+    min_value=15000, 
+    max_value=500000, 
+    step=1000, 
+    value=safe_budget 
+)
 
 # Actions
 if st.button("🚀 Build PC", type="primary"):
