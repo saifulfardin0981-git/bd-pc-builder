@@ -79,7 +79,7 @@ def show_share_menu(link):
         email_url = f"mailto:?subject=My PC Build&body=Check out this build: {link}"
         st.markdown(f'<a href="{email_url}" class="share-btn" style="background-color: #555;">✉️ Email</a>', unsafe_allow_html=True)
 
-# --- MAIN APP LOGIC ---
+# --- MAIN LOGIC ---
 def generate_pc_build(budget):
     conn = get_db_connection()
     if not conn: return None, 0, 0
@@ -118,58 +118,39 @@ def generate_pc_build(budget):
 st.title("🖥️ BD PC Builder AI")
 st.caption("Compare prices from Star Tech & Ryans instantly.")
 
-# --- SAFE URL HANDLING (THE FIX) ---
+# --- SAFE URL HANDLING ---
 query_params = st.query_params
-default_budget = 30000
+raw_budget = 30000 
 
-if "budget" in query_params:
-    try:
-        url_value = int(query_params["budget"])
-        
-        # This logic prevents the crash!
-        if url_value < 15000:
-            default_budget = 15000
-        elif url_value > 500000:
-            default_budget = 500000
-        else:
-            default_budget = url_value
-            
-        st.toast(f"Build loaded for {default_budget} BDT!", icon="✅")
-    except:
-        pass
-
-# --- SAFE URL HANDLING (DEBUGGED VERSION) ---
-query_params = st.query_params
-raw_budget = 30000 # Start with a safe default
-
-# 1. Try to get value from URL
 if "budget" in query_params:
     try:
         raw_budget = int(query_params["budget"])
     except:
-        pass # If error, keep it 30000
+        pass 
 
-# 2. FORCE the value to be safe using Math
-# This ensures it is NEVER below 15000 or above 500000
 safe_budget = max(15000, min(500000, raw_budget))
 
-# 3. Create the input using the SAFE value
-budget_input = st.number_input(
-    "💰 What is your Budget (BDT)?", 
-    min_value=15000, 
-    max_value=500000, 
-    step=1000, 
-    value=safe_budget 
-)
+budget_input = st.number_input("💰 What is your Budget (BDT)?", 15000, 500000, 1000, safe_budget)
 
-# Actions
+# --- MEMORY HANDLING (SESSION STATE) ---
+if "build_results" not in st.session_state:
+    st.session_state.build_results = None
+
+# 1. Trigger Build
 if st.button("🚀 Build PC", type="primary"):
     st.query_params["budget"] = budget_input
     parts, total_cost, saved = generate_pc_build(budget_input)
+    # Save to memory!
+    st.session_state.build_results = {"parts": parts, "total": total_cost, "saved": saved}
+
+# 2. Display Result (From Memory)
+if st.session_state.build_results:
+    data = st.session_state.build_results
+    parts = data["parts"]
     
     if parts:
         st.divider()
-        st.success(f"✅ Build Complete! Total: **{total_cost} BDT**")
+        st.success(f"✅ Build Complete! Total: **{data['total']} BDT**")
         
         # --- SHARE BUTTON ---
         share_url = f"https://bd-pc-builder.streamlit.app/?budget={budget_input}"
@@ -188,5 +169,5 @@ if st.button("🚀 Build PC", type="primary"):
                     col2.link_button("🛒 Buy", f"{item['url']}?ref=YOUR_ID")
                 st.divider()
                 
-        if saved > 0:
-            st.warning(f"💵 Unused Budget: {saved} BDT")
+        if data["saved"] > 0:
+            st.warning(f"💵 Unused Budget: {data['saved']} BDT")
