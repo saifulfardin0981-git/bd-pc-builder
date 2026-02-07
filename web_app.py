@@ -28,31 +28,53 @@ def get_wattage(name):
         return int(match.group(1))
     return 0 
 
-# --- HELPER: ESTIMATED CONSUMPTION CALCULATOR ---
+# --- HELPER: ROBUST POWER CALCULATOR ---
 def calculate_estimated_wattage(parts):
-    """Calculates total estimated power draw of the system"""
-    total_draw = 50 # Base system (Fans, RAM, SSD, Mobo)
+    """Calculates MAX PEAK power draw (TDP + Turbo limits + Safety Buffer)"""
+    total_draw = 100 # Base System (Mobo, RAM, SSD, Fans, RGB, AIO Pump)
     
-    # 1. CPU Power Estimate (TDP + Turbo)
+    # 1. CPU Power (Using Max Turbo Power / PL2, not base TDP)
     if 'CPU' in parts:
         name = parts['CPU']['name'].upper()
-        if "I9" in name or "RYZEN 9" in name: total_draw += 250
-        elif "I7" in name or "RYZEN 7" in name: total_draw += 200
-        elif "I5" in name or "RYZEN 5" in name: total_draw += 120
-        else: total_draw += 80 # i3 or basic CPUs
+        if "I9" in name or "RYZEN 9" in name: total_draw += 300 # i9s can spike huge
+        elif "I7" in name or "RYZEN 7" in name: total_draw += 250
+        elif "I5" in name or "RYZEN 5" in name: total_draw += 150
+        else: total_draw += 100 # i3 / Basic
         
-    # 2. GPU Power Estimate (TGP)
+    # 2. GPU Power (Using TGP + Overclock headroom)
     if 'Graphics Card' in parts:
         name = parts['Graphics Card']['name'].upper()
-        if "4090" in name: total_draw += 450
-        elif "4080" in name or "7900" in name: total_draw += 320
-        elif "4070" in name or "6900" in name or "6800" in name: total_draw += 285
-        elif "3080" in name: total_draw += 320
-        elif "3070" in name or "6700" in name: total_draw += 220
-        elif "4060" in name or "3060" in name or "7600" in name: total_draw += 170
-        elif "6600" in name or "3050" in name: total_draw += 130
-        else: total_draw += 100 # Low end GPU
+        
+        # NVIDIA High End
+        if "4090" in name: total_draw += 500
+        elif "4080" in name: total_draw += 350
+        elif "4070" in name: # Covers Ti, Super, and non-Ti
+            if "TI" in name or "SUPER" in name: total_draw += 300
+            else: total_draw += 240
+            
+        # NVIDIA Mid/Low
+        elif "4060" in name or "3060" in name: total_draw += 180
+        elif "3050" in name: total_draw += 140
+        elif "1660" in name or "1650" in name: total_draw += 130
+        elif "3070" in name or "3080" in name: total_draw += 350 # Older gen was power hungry
+        
+        # AMD High End
+        elif "7900" in name: total_draw += 360
+        elif "7800" in name or "6900" in name or "6800" in name: total_draw += 300
+        elif "7700" in name or "6700" in name: total_draw += 260
+        elif "7600" in name or "6600" in name: total_draw += 180
+        
+        # INTEL ARC
+        elif "A770" in name or "A750" in name: total_draw += 230
+        
+        else: 
+            # Fallback for unknown powerful cards found in 300k builds
+            total_draw += 250 
 
+    # 3. Storage & Extras
+    if 'Storage' in parts:
+        total_draw += 15 # NVMe drive under load
+        
     return total_draw
 
 # --- HELPER: DATABASE FETCHERS ---
