@@ -1,0 +1,42 @@
+name: Daily Price Scraper
+
+on:
+  schedule:
+    # Runs at 00:00 UTC every day (6:00 AM Bangladesh time)
+    - cron: '0 0 * * *'
+  workflow_dispatch: # Adds a manual "Run Now" button for testing
+
+jobs:
+  scrape_and_update:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # 1. Get the latest code
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 2. Set up Python
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      # 3. Install libraries (BeautifulSoup, Requests)
+      - name: Install Dependencies
+        run: |
+          pip install requests beautifulsoup4
+
+      # 4. Run your scraper script
+      # MAKE SURE the filename matches your actual scraper file!
+      # If your file is named 'scrape_ultimate_v2.py', keep this line.
+      - name: Run Scraper
+        run: python scrape_ultimate_v2.py
+
+      # 5. Save the new database back to GitHub
+      - name: Commit and Push Changes
+        run: |
+          git config --global user.name "GitHub Action Bot"
+          git config --global user.email "actions@github.com"
+          git add tech_data.db
+          # Only commit if the database actually changed
+          git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 Auto-update prices" && git push)
