@@ -28,14 +28,11 @@ def get_all_cpus():
     cursor.execute("SELECT name, price FROM processors ORDER BY price DESC")
     rows = cursor.fetchall()
     conn.close()
-    # Return list of tuples: ("Name (Price ৳)", real_name)
     return [f"{row['name']} ({row['price']} ৳)" for row in rows]
 
 # --- HELPER: CPU PARSER ---
 def get_cpu_object(selection_string):
-    """Converts 'Intel i5... (20000 ৳)' back to database object"""
     if not selection_string: return None
-    # Extract name part before the last parenthesis
     name = selection_string.rsplit(' (', 1)[0]
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -53,7 +50,12 @@ def get_wattage(name):
 # --- HELPER: MANDATORY GPU CHECK ---
 def is_gpu_mandatory(cpu_name):
     name = cpu_name.upper()
+    # Intel F/KF series -> Needs GPU
     if "INTEL" in name and ("F" in name.split() or "KF" in name): return True
+    # Ryzen 5000 (non-G) -> Needs GPU. (Simplification for safety)
+    # Most Ryzen 7000+ have iGPU, but Ryzen 5000 is still popular in BD.
+    if "RYZEN" in name and "5" in name and "G" not in name and "7000" not in name and "8000" not in name and "9000" not in name:
+         return True
     return False
 
 # --- HELPER: POWER BREAKDOWN ---
@@ -164,15 +166,13 @@ def generate_pc_build(budget, include_gpu=True, fixed_cpu=None):
     # --- PHASE 1: CPU (Auto or Fixed) ---
     cpu = None
     if fixed_cpu:
-        # User chose specific CPU
         cpu = fixed_cpu
     else:
-        # AI chooses CPU based on 30% budget rule
         cpu = get_best_item(cursor, "processors", budget * 0.30) or get_cheapest_item(cursor, "processors")
 
     if cpu: 
-        if remaining - cpu['price'] < 5000: # Safety check
-            return None, 0, 0, 0, False # CPU too expensive for budget
+        if remaining - cpu['price'] < 5000:
+            return None, 0, 0, 0, False # Budget Error
 
         remaining -= cpu['price']
         parts['CPU'] = dict(cpu)
@@ -185,7 +185,7 @@ def generate_pc_build(budget, include_gpu=True, fixed_cpu=None):
         gpu_required = is_gpu_mandatory(cpu['name'])
         
         # --- PHASE 2: MOTHERBOARD ---
-        mobo_budget = budget * 0.25 # Increased slightly for better mobo matching
+        mobo_budget = budget * 0.25 
         mobo = None
         if cpu_type: mobo = get_best_item(cursor, "motherboards", mobo_budget, cpu_type)
         if not mobo: mobo = get_best_item(cursor, "motherboards", mobo_budget) or get_cheapest_item(cursor, "motherboards")
@@ -193,8 +193,6 @@ def generate_pc_build(budget, include_gpu=True, fixed_cpu=None):
         if mobo:
             remaining -= mobo['price']
             parts['Motherboard'] = dict(mobo)
-            
-            # Smart RAM Type Detection
             mobo_name = mobo['name'].upper()
             ram_type = "DDR4"
             if "DDR5" in mobo_name or " D5 " in mobo_name or any(x in mobo_name for x in ["X670", "B650", "AM5", "Z790", "A620"]):
@@ -211,14 +209,15 @@ def generate_pc_build(budget, include_gpu=True, fixed_cpu=None):
     if casing: remaining -= casing['price']; parts['Casing'] = dict(casing)
 
     # --- PHASE 4: GPU & PSU ---
-    # Reserve cash for PSU
-    if include_gpu or gpu_required:
+    # FORCE GPU if Mandatory
+    should_buy_gpu = include_gpu or gpu_required
+
+    if should_buy_gpu:
         if budget < 60000: psu_reserve = 3500 
         elif budget < 100000: psu_reserve = 5000 
         else: psu_reserve = budget * 0.10
 
         gpu = None
-        # GPU gets whatever is left after reserves
         gpu_budget = remaining - psu_reserve 
         
         if gpu_budget > 10000:
@@ -234,12 +233,11 @@ def generate_pc_build(budget, include_gpu=True, fixed_cpu=None):
     if not psu: psu = get_best_item(cursor, "psus", remaining) 
     if psu: remaining -= psu['price']; parts['Power Supply'] = dict(psu)
 
-    # --- PHASE 5: SWEEPER (If not fixed CPU) ---
-    # Only upgrade CPU if user didn't fix it. Upgrade others always.
-    if include_gpu or gpu_required:
+    # --- PHASE 5: SWEEPER ---
+    if should_buy_gpu:
         upgrade_order = [('Graphics Card', 'gpus', None), ('RAM', 'rams', ram_type), ('Storage', 'ssds', None)]
         if not fixed_cpu:
-            upgrade_order.insert(1, ('CPU', 'processors', None)) # Add CPU back to upgrade list if allowed
+            upgrade_order.insert(1, ('CPU', 'processors', None)) 
             
         for part_name, table, constraint in upgrade_order:
             if part_name in parts and remaining > 1000:
@@ -257,8 +255,8 @@ def generate_pc_build(budget, include_gpu=True, fixed_cpu=None):
     return parts, sum(p['price'] for p in parts.values()), remaining, final_breakdown, gpu_required
 
 # --- UI START ---
-st.title("🖥️ BD PC Builder AI v8.0")
-st.caption("CPU-First Mode. Smart Configurator. Wattage Safe.")
+st.title("🖥️ BD PC Builder AI v8.1")
+st.caption("CPU-First Mode. Smart Configurator. Safety Locked.")
 
 query_params = st.query_params
 safe_budget = 40000
@@ -275,30 +273,37 @@ with st.container():
         cpu_choice_mode = st.radio("CPU Selection:", ["🤖 AI Decides", "🎯 I Choose"], horizontal=True)
 
     selected_cpu_obj = None
+    is_locked = False
+    
     if cpu_choice_mode == "🎯 I Choose":
         all_cpus = get_all_cpus()
         cpu_selection = st.selectbox("Select your Processor:", all_cpus, help="The AI will build the rest of the PC around this CPU.")
         if cpu_selection:
             selected_cpu_obj = get_cpu_object(cpu_selection)
-            st.info(f"Building around: **{selected_cpu_obj['name']}**")
+            # CHECK IF THIS CPU REQUIRES GPU
+            if selected_cpu_obj and is_gpu_mandatory(selected_cpu_obj['name']):
+                is_locked = True
+                st.info(f"🔒 **Locked:** {selected_cpu_obj['name']} requires a Graphics Card.")
 
-    include_gpu_check = st.checkbox("Include Graphics Card?", value=True)
+    # GPU CHECKBOX LOGIC (SAFETY LOCK)
+    if is_locked:
+        # If locked, force True and disable interactivity
+        include_gpu_check = st.checkbox("Include Graphics Card?", value=True, disabled=True, help="This CPU requires a GPU to display video.")
+    else:
+        # Standard toggle
+        include_gpu_check = st.checkbox("Include Graphics Card?", value=True)
 
 if "build_results" not in st.session_state: st.session_state.build_results = None
 
 if st.button("🚀 Build PC", type="primary", use_container_width=True):
     st.query_params["budget"] = budget_input
     
-    # PASS THE FIXED CPU TO THE BUILDER
     parts, total_cost, saved, watts, gpu_forced = generate_pc_build(budget_input, include_gpu_check, fixed_cpu=selected_cpu_obj)
     
     if parts is None:
         st.error(f"❌ Impossible Build! The CPU you selected costs more than your entire budget. Please increase budget.")
     else:
-        gpu_msg = None
-        if gpu_forced and not include_gpu_check:
-            gpu_msg = "⚠️ GPU was added automatically because the selected CPU has no Integrated Graphics."
-        st.session_state.build_results = {"parts": parts, "total": total_cost, "saved": saved, "watts": watts, "gpu_msg": gpu_msg}
+        st.session_state.build_results = {"parts": parts, "total": total_cost, "saved": saved, "watts": watts, "gpu_forced": gpu_forced}
 
 if st.session_state.build_results:
     data = st.session_state.build_results
@@ -308,7 +313,8 @@ if st.session_state.build_results:
     
     if parts:
         st.divider()
-        if data.get("gpu_msg"): st.warning(data["gpu_msg"])
+        if data.get("gpu_forced") and not is_locked:
+             st.warning("⚠️ GPU was added automatically because the AI selected a CPU without Integrated Graphics.")
             
         col_res1, col_res2, col_res3 = st.columns([2, 1, 1])
         with col_res1: st.success(f"✅ Total: **{current_total} BDT**")
@@ -353,9 +359,8 @@ if st.session_state.build_results:
                 with col_action:
                     # DISABLE SWAP FOR CPU IF USER FIXED IT
                     if part_type == 'CPU' and cpu_choice_mode == "🎯 I Choose":
-                        st.write("🔒") # Locked icon
+                        st.write("🔒") 
                     else:
-                        # STANDARD SWAP LOGIC
                         constraint = None
                         if part_type == 'CPU': 
                             if "INTEL" in item['name'].upper(): constraint = "Intel"
