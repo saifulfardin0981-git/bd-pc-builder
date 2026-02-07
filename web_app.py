@@ -30,7 +30,7 @@ def get_wattage(name):
 
 # --- HELPER: DETAILED POWER CALCULATOR ---
 def calculate_power_breakdown(parts):
-    """Calculates power draw and returns the detailed breakdown"""
+    """Calculates power draw and returns the detailed breakdown dict"""
     breakdown = {
         "Base System": 100, # Motherboard, Fans, RAM, RGB
         "CPU": 0,
@@ -39,36 +39,39 @@ def calculate_power_breakdown(parts):
         "Total": 0
     }
     
-    # 1. CPU Power
+    # 1. CPU Power (Max Turbo / PL2)
     if 'CPU' in parts:
         name = parts['CPU']['name'].upper()
-        watts = 65 # Base
-        if "I9" in name or "RYZEN 9" in name: watts = 280
-        elif "I7" in name or "RYZEN 7" in name: watts = 220
-        elif "I5" in name or "RYZEN 5" in name: watts = 140
-        elif "I3" in name or "RYZEN 3" in name: watts = 90
+        watts = 100 # Default fallback
+        if "I9" in name or "RYZEN 9" in name: watts = 300
+        elif "I7" in name or "RYZEN 7" in name: watts = 250
+        elif "I5" in name or "RYZEN 5" in name: watts = 150
+        else: watts = 100
         breakdown["CPU"] = watts
         
-    # 2. GPU Power
+    # 2. GPU Power (TGP + Headroom)
     if 'Graphics Card' in parts:
         name = parts['Graphics Card']['name'].upper()
-        watts = 50 # Base generic
-        # NVIDIA
-        if "4090" in name: watts = 480
-        elif "4080" in name: watts = 340
-        elif "4070" in name: watts = 285 if "TI" in name else 220
-        elif "4060" in name: watts = 160
-        elif "3090" in name: watts = 400
-        elif "3080" in name: watts = 340
-        elif "3070" in name: watts = 240
-        elif "3060" in name: watts = 180
-        elif "3050" in name: watts = 140
-        # AMD
+        watts = 150 # Default fallback
+        
+        # High End
+        if "4090" in name: watts = 500
+        elif "4080" in name: watts = 350
         elif "7900" in name: watts = 360
-        elif "7800" in name: watts = 290
-        elif "7700" in name: watts = 250
-        elif "7600" in name: watts = 180
-        elif "6900" in name or "6800" in name: watts = 300
+        elif "4070" in name: watts = 300 if ("TI" in name or "SUPER" in name) else 240
+        elif "7800" in name or "6900" in name or "6800" in name: watts = 300
+        elif "3080" in name or "3090" in name: watts = 350
+        
+        # Mid Range
+        elif "4060" in name or "3060" in name or "7600" in name: watts = 180
+        elif "7700" in name or "6700" in name: watts = 260
+        elif "3070" in name: watts = 250
+        elif "A770" in name or "A750" in name: watts = 230
+        
+        # Entry Level
+        elif "3050" in name or "6600" in name: watts = 140
+        elif "1660" in name or "1650" in name: watts = 130
+        
         breakdown["GPU"] = watts
 
     # 3. Storage
@@ -78,7 +81,82 @@ def calculate_power_breakdown(parts):
     # Calculate Total
     breakdown["Total"] = sum(breakdown.values())
     return breakdown
-
+def render_power_badge(breakdown):
+    # CSS for the Tooltip
+    css = """
+    <style>
+    .power-container {
+        position: relative;
+        display: inline-block;
+        cursor: pointer;
+        font-family: sans-serif;
+    }
+    .power-badge {
+        background-color: #FF4B4B;
+        color: white;
+        padding: 8px 16px;
+        border-radius: 8px;
+        font-weight: bold;
+        font-size: 18px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        transition: transform 0.2s;
+    }
+    .power-badge:hover {
+        transform: scale(1.05);
+    }
+    .power-tooltip {
+        visibility: hidden;
+        width: 220px;
+        background-color: #262730;
+        color: #fff;
+        text-align: left;
+        border-radius: 8px;
+        padding: 12px;
+        position: absolute;
+        z-index: 10;
+        top: 125%; /* Position below the badge */
+        left: 50%;
+        margin-left: -110px; /* Center it */
+        box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+        opacity: 0;
+        transition: opacity 0.3s;
+        border: 1px solid #444;
+    }
+    .power-container:hover .power-tooltip {
+        visibility: visible;
+        opacity: 1;
+    }
+    .power-row {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 4px;
+        font-size: 14px;
+    }
+    .power-total {
+        border-top: 1px solid #666;
+        padding-top: 8px;
+        margin-top: 8px;
+        font-weight: bold;
+        color: #FF4B4B;
+    }
+    </style>
+    """
+    
+    # HTML for the Badge + Menu
+    html = f"""
+    {css}
+    <div class="power-container">
+        <div class="power-badge">⚡ {breakdown['Total']}W</div>
+        <div class="power-tooltip">
+            <div class="power-row"><span>System Base:</span> <span>{breakdown['Base System']}W</span></div>
+            <div class="power-row"><span>CPU Max:</span> <span>{breakdown['CPU']}W</span></div>
+            <div class="power-row"><span>GPU Peak:</span> <span>{breakdown['GPU']}W</span></div>
+            <div class="power-row"><span>Storage:</span> <span>{breakdown['Storage']}W</span></div>
+            <div class="power-row power-total"><span>EST. MAX:</span> <span>{breakdown['Total']}W</span></div>
+        </div>
+    </div>
+    """
+    return html
 # --- HELPER: DATABASE FETCHERS ---
 def get_best_item(cursor, table, max_price, spec_constraint=None, min_watts=0):
     query = f"SELECT * FROM {table} WHERE price <= ? AND price > 0"
@@ -244,10 +322,12 @@ def generate_pc_build(budget):
                 remaining -= cost_diff
 
     # Final Wattage Calculation
-    final_watts = calculate_estimated_wattage(parts)
+    # OLD: final_watts = calculate_estimated_wattage(parts) 
+    # NEW:
+    final_breakdown = calculate_power_breakdown(parts) 
     
     conn.close()
-    return parts, sum(p['price'] for p in parts.values()), remaining, final_watts
+    return parts, sum(p['price'] for p in parts.values()), remaining, final_breakdown
 
 # --- UI START ---
 st.title("🖥️ BD PC Builder AI v4.1")
@@ -282,20 +362,31 @@ if st.session_state.build_results:
         st.divider()
         st.success(f"✅ Build Complete! Total: **{data['total']} BDT**")
         
-        # --- NEW: TOP BAR (Share + Power) ---
-        col1, col2 = st.columns([1, 1])
+       # ... inside the UI loop ...
+if st.session_state.build_results:
+    data = st.session_state.build_results
+    parts = data["parts"]
+    
+    if parts:
+        st.divider()
+        st.success(f"✅ Build Complete! Total: **{data['total']} BDT**")
+        
+        # --- NEW TOP BAR ---
+        col1, col2 = st.columns([1, 1], gap="small")
         
         with col1:
              share_url = f"https://bd-pc-builder.streamlit.app/?budget={budget_input}"
-             if st.button("📤 Share this Build", use_container_width=True):
+             if st.button("📤 Share Build", use_container_width=True):
                  show_share_menu(share_url)
                  
         with col2:
-            # Show Estimated Power in a nice metric box
-            st.metric(label="⚡ Estimated Power", value=f"{data['watts']}W")
+            # Render the Custom Hover Badge
+            breakdown = data['watts'] # This is now the dictionary
+            badge_html = render_power_badge(breakdown)
+            st.markdown(badge_html, unsafe_allow_html=True)
 
         st.divider()
-
+        # ... Component List follows ...
         # --- COMPONENT LIST ---
         for part_type, item in parts.items():
             with st.container():
