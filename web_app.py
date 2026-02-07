@@ -72,7 +72,6 @@ def generate_pc_build(budget):
     remaining = budget
     parts = {}
     
-    # Priority List
     cpu = get_best_item(cursor, "processors", budget * 0.30) or get_cheapest_item(cursor, "processors")
     if cpu: remaining -= cpu['price']; parts['CPU'] = cpu
     
@@ -99,10 +98,10 @@ def generate_pc_build(budget):
     return parts, sum(p['price'] for p in parts.values()), remaining
 
 # --- UI START ---
-st.title("🖥️ BD PC Builder AI v2.1") # Verifying text
+st.title("🖥️ BD PC Builder AI v3.0") # Changed to v3.0 to verify update
 st.caption("Compare prices from Star Tech & Ryans instantly.")
 
-# --- CRASH FIX LOGIC ---
+# --- SAFE URL HANDLING ---
 query_params = st.query_params
 raw_budget = 30000
 
@@ -115,26 +114,15 @@ if "budget" in query_params:
 # Force the value to be safe
 safe_budget = max(15000, min(500000, raw_budget))
 
-# WE ADDED key="budget_v2" TO RESET THE WIDGET MEMORY
+# KEY="BUDGET_V2" FORCES A RESET OF THE WIDGET
 budget_input = st.number_input(
     "💰 What is your Budget (BDT)?", 
     min_value=15000, 
     max_value=500000, 
     step=1000, 
     value=safe_budget,
-    key="budget_v2" 
+    key="budget_v2"
 )
-
-if "budget" in query_params:
-    try:
-        raw_budget = int(query_params["budget"])
-    except:
-        pass
-
-# Force the value to be safe
-safe_budget = max(15000, min(500000, raw_budget))
-
-budget_input = st.number_input("💰 What is your Budget (BDT)?", 15000, 500000, 1000, safe_budget)
 
 # --- SESSION STATE MEMORY ---
 if "build_results" not in st.session_state:
@@ -145,7 +133,7 @@ if st.button("🚀 Build PC", type="primary"):
     parts, total_cost, saved = generate_pc_build(budget_input)
     st.session_state.build_results = {"parts": parts, "total": total_cost, "saved": saved}
 
-# Display Results from Memory
+# Display Results
 if st.session_state.build_results:
     data = st.session_state.build_results
     parts = data["parts"]
