@@ -6,7 +6,7 @@ import re
 st.set_page_config(
     page_title="BD PC Builder", 
     page_icon="🖥️", 
-    layout="centered",
+    layout="wide", # Switched to Wide mode for better builder layout
     initial_sidebar_state="collapsed"
 )
 
@@ -25,6 +25,23 @@ def get_wattage(name):
     match = re.search(r'(\d{3,4})\s*[Ww]', name) 
     if match: return int(match.group(1))
     return 0 
+
+# --- HELPER: CPU LOGIC (MANDATORY GPU CHECK) ---
+def is_gpu_mandatory(cpu_name):
+    """Returns True if the CPU has NO integrated graphics"""
+    name = cpu_name.upper()
+    # Intel F or KF series (e.g., i5-12400F, i9-13900KF) -> Needs GPU
+    if "INTEL" in name and ("F" in name.split() or "KF" in name): 
+        return True
+    
+    # AMD Logic:
+    # Ryzen 5000 series (non-G) usually need GPU. 
+    # Ryzen 7000/8000/9000 usually HAVE iGPU (but weak).
+    # For safety, we only force GPU on known "No iGPU" chips if we can detect them.
+    # Simple Rule: If it's AMD and NOT 'G' series (APU), we highly recommend GPU, 
+    # but strictly speaking, only old Ryzens blocked booting.
+    # Let's stick to the strict Intel rule for now to avoid false positives.
+    return False
 
 # --- HELPER: DETAILED POWER CALCULATOR ---
 def calculate_power_breakdown(parts):
@@ -88,31 +105,22 @@ def get_cheapest_item(cursor, table, min_watts=0):
         return valid_psus[0] if valid_psus else None
     return rows[0] if rows else None
 
-# --- IMPROVED SWAP HELPER (Fixes CPU Issue) ---
+# --- SWAP HELPER ---
 def get_alternatives(table, current_price, name_search=None):
     conn = get_db_connection()
     if not conn: return []
     cursor = conn.cursor()
-    
-    # Range: 50% cheap to 300% expensive (Wider range to see upgrades)
     min_price = current_price * 0.5
     max_price = current_price * 3.0
-    
     query = f"SELECT * FROM {table} WHERE price BETWEEN ? AND ?"
     params = [min_price, max_price]
-    
-    # Search by NAME, not Tag (Fixes CPU Issue)
     if name_search:
         query += " AND name LIKE ?"
         params.append(f"%{name_search}%")
-        
-    # Sort DESC (Most expensive/best first) and show MORE items (50)
     query += " ORDER BY price DESC LIMIT 50" 
-    
     cursor.execute(query, params)
     rows = cursor.fetchall()
     conn.close()
-    
     return [dict(row) for row in rows]
 
 # --- HOVER BADGE ---
@@ -136,7 +144,7 @@ def show_share_menu(link):
     with col4: st.markdown(f'<a href="mailto:?subject=My PC Build&body=Check out this build: {link}" class="share-btn" style="background-color: #555;">✉️ Email</a>', unsafe_allow_html=True)
 
 # --- MASTER BUILD LOGIC ---
-def generate_pc_build(budget):
+def generate_pc_build(budget, include_gpu=True):
     conn = get_db_connection()
     if not conn: return None, 0, 0, 0
     cursor = conn.cursor()
@@ -154,6 +162,10 @@ def generate_pc_build(budget):
         elif "AMD" in cpu_name: cpu_type = "AMD"
         else: cpu_type = None
 
+        # Check GPU Requirement
+        gpu_required = is_gpu_mandatory(cpu['name'])
+        
+        # 2. Motherboard
         mobo_budget = budget * 0.20
         mobo = None
         if cpu_type: mobo = get_best_item(cursor, "motherboards", mobo_budget, cpu_type)
@@ -174,17 +186,19 @@ def generate_pc_build(budget):
     casing = get_best_item(cursor, "casings", 5000) or get_cheapest_item(cursor, "casings")
     if casing: remaining -= casing['price']; parts['Casing'] = dict(casing)
 
-    # Phase 2: Reserve
-    if budget < 60000: psu_reserve = 3500 
-    elif budget < 100000: psu_reserve = 5000 
-    else: psu_reserve = budget * 0.10
+    # Phase 2: Reserve & GPU
+    # If GPU is NOT included and NOT required, we skip reserving money for it
+    if include_gpu or gpu_required:
+        if budget < 60000: psu_reserve = 3500 
+        elif budget < 100000: psu_reserve = 5000 
+        else: psu_reserve = budget * 0.10
 
-    gpu = None
-    gpu_budget = remaining - psu_reserve 
-    if gpu_budget > 10000:
-        gpu = get_best_item(cursor, "gpus", gpu_budget)
-        if gpu: remaining -= gpu['price']; parts['Graphics Card'] = dict(gpu)
-
+        gpu = None
+        gpu_budget = remaining - psu_reserve 
+        if gpu_budget > 10000:
+            gpu = get_best_item(cursor, "gpus", gpu_budget)
+            if gpu: remaining -= gpu['price']; parts['Graphics Card'] = dict(gpu)
+    
     # Phase 3: Safety & PSU
     breakdown_data = calculate_power_breakdown(parts) 
     estimated_watts = breakdown_data['Total']
@@ -195,26 +209,27 @@ def generate_pc_build(budget):
     if not psu: psu = get_best_item(cursor, "psus", remaining) 
     if psu: remaining -= psu['price']; parts['Power Supply'] = dict(psu)
 
-    # Phase 4: Sweeper
-    upgrade_order = [('Graphics Card', 'gpus', None), ('CPU', 'processors', None), ('RAM', 'rams', ram_type), ('Storage', 'ssds', None), ('Motherboard', 'motherboards', cpu_type)]
-    for part_name, table, constraint in upgrade_order:
-        if part_name in parts and remaining > 1000:
-            current_item = parts[part_name]
-            current_price = current_item['price']
-            potential_budget = current_price + remaining
-            better_item = get_best_item(cursor, table, potential_budget, constraint)
-            if better_item and better_item['price'] > current_price:
-                cost_diff = better_item['price'] - current_price
-                parts[part_name] = dict(better_item)
-                remaining -= cost_diff
+    # Phase 4: Sweeper (Only if GPU is included/required)
+    if include_gpu or gpu_required:
+        upgrade_order = [('Graphics Card', 'gpus', None), ('CPU', 'processors', None), ('RAM', 'rams', ram_type), ('Storage', 'ssds', None), ('Motherboard', 'motherboards', cpu_type)]
+        for part_name, table, constraint in upgrade_order:
+            if part_name in parts and remaining > 1000:
+                current_item = parts[part_name]
+                current_price = current_item['price']
+                potential_budget = current_price + remaining
+                better_item = get_best_item(cursor, table, potential_budget, constraint)
+                if better_item and better_item['price'] > current_price:
+                    cost_diff = better_item['price'] - current_price
+                    parts[part_name] = dict(better_item)
+                    remaining -= cost_diff
 
     final_breakdown = calculate_power_breakdown(parts)
     conn.close()
-    return parts, sum(p['price'] for p in parts.values()), remaining, final_breakdown
+    return parts, sum(p['price'] for p in parts.values()), remaining, final_breakdown, gpu_required
 
 # --- UI START ---
-st.title("🖥️ BD PC Builder AI v6.1")
-st.caption("Smart Configurator. Wattage Safe. Edit Freedom.")
+st.title("🖥️ BD PC Builder AI v7.0")
+st.caption("Smart Configurator. GPU Logic. Optimized Budget.")
 
 query_params = st.query_params
 safe_budget = 40000
@@ -222,14 +237,28 @@ if "budget" in query_params:
     try: safe_budget = int(query_params["budget"])
     except: pass
 
-budget_input = st.number_input("💰 What is your Budget (BDT)?", min_value=15000, max_value=500000, step=1000, value=safe_budget, key="budget_v61")
+# --- INPUT SECTION ---
+col1, col2 = st.columns([2, 1])
+with col1:
+    budget_input = st.number_input("💰 Budget (BDT)", min_value=15000, max_value=800000, step=1000, value=safe_budget, key="budget_v7")
+with col2:
+    st.write("") # Spacer
+    st.write("")
+    include_gpu_check = st.checkbox("Include Graphics Card?", value=True, help="Uncheck if you want to use Integrated Graphics (if available).")
 
 if "build_results" not in st.session_state: st.session_state.build_results = None
 
-if st.button("🚀 Build PC", type="primary"):
+if st.button("🚀 Build PC", type="primary", use_container_width=True):
     st.query_params["budget"] = budget_input
-    parts, total_cost, saved, watts = generate_pc_build(budget_input)
-    st.session_state.build_results = {"parts": parts, "total": total_cost, "saved": saved, "watts": watts}
+    # We pass the checkbox preference, but the function might OVERRIDE it if CPU requires GPU
+    parts, total_cost, saved, watts, gpu_forced = generate_pc_build(budget_input, include_gpu_check)
+    
+    # Check if GPU was forced
+    gpu_msg = None
+    if gpu_forced and not include_gpu_check:
+        gpu_msg = "⚠️ GPU was added automatically because the selected CPU has no Integrated Graphics."
+        
+    st.session_state.build_results = {"parts": parts, "total": total_cost, "saved": saved, "watts": watts, "gpu_msg": gpu_msg}
 
 if st.session_state.build_results:
     data = st.session_state.build_results
@@ -239,13 +268,16 @@ if st.session_state.build_results:
     
     if parts:
         st.divider()
-        st.success(f"✅ Total: **{current_total} BDT**")
-        
-        col1, col2 = st.columns([1, 1], gap="small")
-        with col1:
+        if data.get("gpu_msg"):
+            st.warning(data["gpu_msg"])
+            
+        col_res1, col_res2, col_res3 = st.columns([2, 1, 1])
+        with col_res1:
+            st.success(f"✅ Total: **{current_total} BDT**")
+        with col_res2:
              share_url = f"https://bd-pc-builder.streamlit.app/?budget={budget_input}"
-             if st.button("📤 Share Build", use_container_width=True): show_share_menu(share_url)  
-        with col2:
+             if st.button("📤 Share", use_container_width=True): show_share_menu(share_url)  
+        with col_res3:
             badge_html = render_power_badge(current_breakdown)
             st.markdown(badge_html, unsafe_allow_html=True)
             
@@ -255,13 +287,19 @@ if st.session_state.build_results:
 
         st.divider()
 
-        # --- COMPONENT LIST WITH EDIT ---
+        # --- SEPARATE REQUIRED VS OPTIONAL ---
+        st.subheader("🛠️ Core Components")
+        
         table_map = {
             'CPU': 'processors', 'Motherboard': 'motherboards', 'RAM': 'rams',
             'Storage': 'ssds', 'Graphics Card': 'gpus', 'Power Supply': 'psus', 'Casing': 'casings'
         }
 
-        for part_type, item in parts.items():
+        # Core Loop
+        core_items = {k: v for k, v in parts.items() if k != 'Graphics Card'}
+        gpu_item = parts.get('Graphics Card')
+
+        for part_type, item in core_items.items():
             with st.container():
                 col_img, col_details, col_price, col_action = st.columns([1, 2, 1, 0.5])
                 with col_img:
@@ -276,15 +314,13 @@ if st.session_state.build_results:
                 with col_price:
                     st.markdown(f"**{item['price']} ৳**")
                     if item.get('url'): st.link_button("🛒", f"{item['url']}?ref=YOUR_ID")
-                
                 with col_action:
-                    # FIX: Search by NAME ("Intel"/"AMD"), not Tag
+                     # Swap Logic (Same as before)
                     constraint = None
                     if part_type == 'CPU': 
                         if "INTEL" in item['name'].upper(): constraint = "Intel"
-                        elif "AMD" in item['name'].upper() or "RYZEN" in item['name'].upper(): constraint = "AMD" # Or "Ryzen"
+                        elif "AMD" in item['name'].upper() or "RYZEN" in item['name'].upper(): constraint = "AMD"
                     elif part_type == 'Motherboard':
-                        # Use CPU name to constrain Mobo swap
                         cpu_name = parts['CPU']['name'].upper()
                         if "INTEL" in cpu_name: constraint = "Intel"
                         elif "AMD" in cpu_name or "RYZEN" in cpu_name: constraint = "AMD" 
@@ -295,13 +331,8 @@ if st.session_state.build_results:
                         st.markdown(f"**Swap {part_type}**")
                         table_name = table_map.get(part_type)
                         if table_name:
-                            # Pass constraint as 'name_search'
                             alts = get_alternatives(table_name, item['price'], constraint)
-                            
-                            # Insert Current Item at Top (So it's never missing!)
                             alts.insert(0, item) 
-                            
-                            # Deduplicate (in case current item was also found in DB query)
                             seen = set()
                             unique_alts = []
                             for a in alts:
@@ -311,17 +342,49 @@ if st.session_state.build_results:
 
                             if unique_alts:
                                 alt_map = {f"{a['name'][:40]}... ({a['price']} ৳)": a for a in unique_alts}
-                                # Default to index 0 (current item)
                                 selected_name = st.selectbox("Choose:", list(alt_map.keys()), index=0, key=f"sel_{part_type}")
-                                
                                 if st.button("Confirm", key=f"btn_{part_type}"):
                                     st.session_state.build_results['parts'][part_type] = alt_map[selected_name]
                                     st.rerun()
-                            else:
-                                st.warning("No alternatives found.")
+
+        # GPU Section (Separate)
+        if gpu_item:
+            st.subheader("🎮 Graphics & Expansion")
+            with st.container():
+                col_img, col_details, col_price, col_action = st.columns([1, 2, 1, 0.5])
+                with col_img:
+                    if gpu_item.get('image_url'): st.image(gpu_item['image_url'], width=80)
+                    else: st.write("📦")
+                with col_details:
+                    st.markdown("**Graphics Card**")
+                    st.caption(gpu_item['name'])
+                with col_price:
+                    st.markdown(f"**{gpu_item['price']} ৳**")
+                    if gpu_item.get('url'): st.link_button("🛒", f"{gpu_item['url']}?ref=YOUR_ID")
+                with col_action:
+                    with st.popover("🔄"):
+                        st.markdown("**Swap GPU**")
+                        alts = get_alternatives("gpus", gpu_item['price'])
+                        alts.insert(0, gpu_item)
+                        # ... (Same deduplication logic)
+                        seen = set()
+                        unique_alts = []
+                        for a in alts:
+                            if a['name'] not in seen: unique_alts.append(a); seen.add(a['name'])
+                        
+                        alt_map = {f"{a['name'][:40]}... ({a['price']} ৳)": a for a in unique_alts}
+                        selected_name = st.selectbox("Choose:", list(alt_map.keys()), index=0, key="sel_gpu")
+                        if st.button("Confirm", key="btn_gpu"):
+                            st.session_state.build_results['parts']['Graphics Card'] = alt_map[selected_name]
+                            st.rerun()
 
                 st.divider()
-                
+
+        # Budget Feedback
         live_unused = budget_input - current_total
-        if live_unused > 0: st.warning(f"💵 Unused Budget: {live_unused} BDT")
-        elif live_unused < 0: st.error(f"⚠️ Over Budget: {abs(live_unused)} BDT")
+        if live_unused > 20000:
+            st.info(f"💎 **Surplus Budget: {live_unused} BDT**\n\nYou have purchased the best available components! Use this extra cash for a Monitor, Keyboard, or specialized cooling.")
+        elif live_unused > 0:
+            st.warning(f"💵 Unused Budget: {live_unused} BDT")
+        elif live_unused < 0:
+            st.error(f"⚠️ Over Budget: {abs(live_unused)} BDT")
