@@ -75,38 +75,42 @@ def generate_pc_build(budget):
     parts = {}
     
     # 1. CPU (The Brain) - 30% of budget
-    # We grab the 'spec_tag' to know if it's Intel or AMD
-    cpu = get_best_item(cursor, "processors", budget * 0.30)
-    if not cpu:
-        cpu = get_cheapest_item(cursor, "processors")
-        
+   # 1. CPU (The Brain)
+    cpu = get_best_item(cursor, "processors", budget * 0.30) or get_cheapest_item(cursor, "processors")
+    
     if cpu: 
         remaining -= cpu['price']
         parts['CPU'] = cpu
         
-        # --- COMPATIBILITY CHECK 1: MOTHERBOARD ---
-        # If CPU is "Intel", force Motherboard to be "Intel"
-        # If CPU is "AMD", force Motherboard to be "AMD"
-        cpu_type = cpu['spec_tag'] # e.g., "Intel" or "AMD"
-        
+        # --- SMART FIX: Detect Type from Name ---
+        # (This ensures we don't rely on empty database tags)
+        cpu_name = cpu['name'].upper()
+        if "INTEL" in cpu_name:
+            cpu_type = "Intel"
+        elif "AMD" in cpu_name or "RYZEN" in cpu_name:
+            cpu_type = "AMD"
+        else:
+            cpu_type = None # Unknown
+
+        # 2. Motherboard (Must match CPU)
         mobo_budget = budget * 0.20
-        # We pass 'cpu_type' as the constraint!
-        mobo = get_best_item(cursor, "motherboards", mobo_budget, cpu_type)
+        mobo = None
         
-        # If no matching mobo found (rare), fallback to cheapest matching one
+        if cpu_type:
+            # Try to find a matching board (e.g., Intel -> Intel)
+            mobo = get_best_item(cursor, "motherboards", mobo_budget, cpu_type)
+        
+        # Fallback: If no match found, just get the best available
         if not mobo:
-            query = f"SELECT * FROM motherboards WHERE spec_tag LIKE ? ORDER BY price ASC LIMIT 1"
-            cursor.execute(query, [f"%{cpu_type}%"])
-            mobo = cursor.fetchone()
+            mobo = get_best_item(cursor, "motherboards", mobo_budget) or get_cheapest_item(cursor, "motherboards")
             
         if mobo:
             remaining -= mobo['price']
             parts['Motherboard'] = mobo
             
-            # --- COMPATIBILITY CHECK 2: RAM ---
-            # Check if motherboard supports DDR4 or DDR5
-            # (Assumes our scraper tagged them correctly. If unsure, default to DDR4)
-            ram_type = "DDR4"
+            # 3. RAM (Check for DDR5 support)
+            # If the motherboard name says "DDR5", we MUST pick DDR5 RAM.
+            ram_type = "DDR4" # Default
             if "DDR5" in mobo['name'].upper():
                 ram_type = "DDR5"
             
