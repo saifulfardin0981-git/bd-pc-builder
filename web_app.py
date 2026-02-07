@@ -55,22 +55,43 @@ def is_gpu_mandatory(cpu_name):
          return True
     return False
 
-# --- HELPER: BOTTLENECK CALCULATOR (NEW) ---
+# --- HELPER: BOTTLENECK CALCULATOR ---
 def check_bottleneck(cpu_price, gpu_price):
-    """Checks if the GPU is too weak for the CPU"""
     if gpu_price == 0: return None
-    
-    # Calculate Ratio: GPU Price / CPU Price
     ratio = gpu_price / cpu_price
-    
-    # Logic: A balanced gaming PC usually has a GPU that is 1x-2x the CPU price.
-    # If GPU is < 50% of CPU price, it's likely a bottleneck for gaming.
     if ratio < 0.5:
-        return f"⚠️ **Potential Bottleneck:** Your GPU ({gpu_price}৳) is significantly weaker than your CPU ({cpu_price}৳). For better gaming performance, consider spending more on the GPU."
-    elif ratio < 0.8:
-        return f"ℹ️ **Tip:** Your GPU is slightly underpowered for this CPU. It's okay for general use, but a better GPU would maximize gaming FPS."
-    
+        return f"⚠️ **Bottleneck Detected:** GPU is significantly weaker than CPU."
     return None
+
+# --- NEW HELPER: GPU RECOMMENDATIONS ---
+def get_gpu_recommendations(cpu_price):
+    """Categorizes GPUs based on price ratio with CPU"""
+    conn = get_db_connection()
+    if not conn: return [], []
+    cursor = conn.cursor()
+    
+    # Get all GPUs
+    cursor.execute("SELECT * FROM gpus ORDER BY price DESC")
+    all_gpus = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    
+    preferred = []
+    risky = []
+    
+    for gpu in all_gpus:
+        price = gpu['price']
+        if price <= 0: continue
+        
+        ratio = price / cpu_price
+        
+        # Logic: 0.6x to 2.5x is the "Sweet Spot"
+        if 0.6 <= ratio <= 2.5:
+            preferred.append(gpu)
+        else:
+            risky.append(gpu)
+            
+    # Limit lists to avoid UI clutter
+    return preferred[:10], risky[:10] # Top 10 of each
 
 # --- HELPER: POWER BREAKDOWN ---
 def calculate_power_breakdown(parts):
@@ -198,8 +219,6 @@ def generate_pc_build(budget, include_gpu=True, fixed_cpu=None):
         
         # --- PHASE 2: BUDGET ALLOCATION ---
         cash_left = remaining
-        
-        # Smart Squeeze Allocations
         mobo_alloc = 0.20
         ram_alloc = 0.10
         ssd_alloc = 0.10
@@ -292,9 +311,7 @@ def generate_pc_build(budget, include_gpu=True, fixed_cpu=None):
                     remaining -= cost_diff
     
     # --- PHASE 6: BOTTLENECK CHECK ---
-    # Only run if we have both CPU and GPU
     if 'Graphics Card' in parts and 'CPU' in parts:
-        # If advice_msg isn't already set (don't overwrite critical errors)
         if not advice_msg:
              advice_msg = check_bottleneck(parts['CPU']['price'], parts['Graphics Card']['price'])
 
@@ -303,8 +320,8 @@ def generate_pc_build(budget, include_gpu=True, fixed_cpu=None):
     return parts, sum(p['price'] for p in parts.values()), remaining, final_breakdown, gpu_required, advice_msg
 
 # --- UI START ---
-st.title("🖥️ BD PC Builder AI v10.0")
-st.caption("Expert Mode. Bottleneck Prevention. Smart Advisor.")
+st.title("🖥️ BD PC Builder AI v10.1")
+st.caption("Expert Mode. Smart Recommendations.")
 
 query_params = st.query_params
 safe_budget = 40000
@@ -357,14 +374,39 @@ if st.session_state.build_results:
     if parts:
         st.divider()
         
-        # --- SMART ADVICE SECTION ---
+        # --- WARNINGS & ADVICE ---
         if data.get("advice"):
-             # Detect severity of the message
-             if "Bottleneck" in data["advice"] or "Crisis" in data["advice"]:
-                 st.warning(data["advice"])
-             else:
-                 st.info(data["advice"])
-                 
+            st.error(data["advice"])
+            
+            # --- NEW: GPU RECOMMENDATION EXPANDER ---
+            if "Bottleneck" in data["advice"] or "Crisis" in data["advice"]:
+                cpu_price = parts['CPU']['price']
+                preferred, risky = get_gpu_recommendations(cpu_price)
+                
+                with st.expander("💡 View Recommended GPUs for this CPU", expanded=True):
+                    st.markdown("### ✅ Best Matches (Balanced)")
+                    if preferred:
+                        for gpu in preferred:
+                            c1, c2, c3 = st.columns([3, 1, 1])
+                            c1.write(f"**{gpu['name']}**")
+                            c2.write(f"{gpu['price']} ৳")
+                            if c3.button("Swap", key=f"swap_p_{gpu['id']}"):
+                                st.session_state.build_results['parts']['Graphics Card'] = gpu
+                                st.rerun()
+                    else:
+                        st.info("No perfect matches found in database.")
+
+                    st.markdown("---")
+                    st.markdown("### ⚠️ Other Options (May Bottleneck)")
+                    if risky:
+                        for gpu in risky:
+                            c1, c2, c3 = st.columns([3, 1, 1])
+                            c1.write(f"**{gpu['name']}**")
+                            c2.write(f"{gpu['price']} ৳")
+                            if c3.button("Swap", key=f"swap_r_{gpu['id']}"):
+                                st.session_state.build_results['parts']['Graphics Card'] = gpu
+                                st.rerun()
+
         if data.get("gpu_forced") and not is_locked:
              st.info("ℹ️ GPU was added automatically because the AI selected a CPU without Integrated Graphics.")
              
