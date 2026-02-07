@@ -28,7 +28,7 @@ def get_wattage(name):
         return int(match.group(1))
     return 0 
 
-# --- HELPER: DETAILED POWER CALCULATOR ---
+# --- HELPER: DETAILED POWER CALCULATOR (NEW) ---
 def calculate_power_breakdown(parts):
     """Calculates power draw and returns the detailed breakdown dict"""
     breakdown = {
@@ -81,8 +81,9 @@ def calculate_power_breakdown(parts):
     # Calculate Total
     breakdown["Total"] = sum(breakdown.values())
     return breakdown
+
+# --- HELPER: HOVER BADGE RENDERER (NEW) ---
 def render_power_badge(breakdown):
-    # CSS for the Tooltip
     css = """
     <style>
     .power-container {
@@ -114,9 +115,9 @@ def render_power_badge(breakdown):
         padding: 12px;
         position: absolute;
         z-index: 10;
-        top: 125%; /* Position below the badge */
+        top: 125%;
         left: 50%;
-        margin-left: -110px; /* Center it */
+        margin-left: -110px;
         box-shadow: 0 8px 16px rgba(0,0,0,0.2);
         opacity: 0;
         transition: opacity 0.3s;
@@ -142,7 +143,6 @@ def render_power_badge(breakdown):
     </style>
     """
     
-    # HTML for the Badge + Menu
     html = f"""
     {css}
     <div class="power-container">
@@ -152,11 +152,12 @@ def render_power_badge(breakdown):
             <div class="power-row"><span>CPU Max:</span> <span>{breakdown['CPU']}W</span></div>
             <div class="power-row"><span>GPU Peak:</span> <span>{breakdown['GPU']}W</span></div>
             <div class="power-row"><span>Storage:</span> <span>{breakdown['Storage']}W</span></div>
-            <div class="power-row power-total"><span>EST. MAX:</span> <span>{breakdown['Total']}W</span></div>
+            <div class="power-row power-total"><span>EST. PEAK:</span> <span>{breakdown['Total']}W</span></div>
         </div>
     </div>
     """
     return html
+
 # --- HELPER: DATABASE FETCHERS ---
 def get_best_item(cursor, table, max_price, spec_constraint=None, min_watts=0):
     query = f"SELECT * FROM {table} WHERE price <= ? AND price > 0"
@@ -209,7 +210,7 @@ def show_share_menu(link):
     with col3: st.markdown(f'<a href="fb-messenger://share/?link={link}" target="_blank" class="share-btn" style="background-color: #0084FF;">⚡ Messenger</a>', unsafe_allow_html=True)
     with col4: st.markdown(f'<a href="mailto:?subject=My PC Build&body=Check out this build: {link}" class="share-btn" style="background-color: #555;">✉️ Email</a>', unsafe_allow_html=True)
 
-# --- MASTER BUILD LOGIC (Balanced Version) ---
+# --- MASTER BUILD LOGIC ---
 def generate_pc_build(budget):
     conn = get_db_connection()
     if not conn: return None, 0, 0, 0
@@ -219,19 +220,15 @@ def generate_pc_build(budget):
     parts = {}
     
     # --- PHASE 1: CORE COMPONENTS ---
-    
-    # 1. CPU
     cpu = get_best_item(cursor, "processors", budget * 0.30) or get_cheapest_item(cursor, "processors")
     if cpu: 
         remaining -= cpu['price']
         parts['CPU'] = cpu
-        
         cpu_name = cpu['name'].upper()
         if "INTEL" in cpu_name: cpu_type = "Intel"
         elif "AMD" in cpu_name or "RYZEN" in cpu_name: cpu_type = "AMD"
         else: cpu_type = None
 
-        # 2. Motherboard
         mobo_budget = budget * 0.20
         mobo = None
         if cpu_type: mobo = get_best_item(cursor, "motherboards", mobo_budget, cpu_type)
@@ -240,8 +237,6 @@ def generate_pc_build(budget):
         if mobo:
             remaining -= mobo['price']
             parts['Motherboard'] = mobo
-            
-            # 3. RAM
             mobo_name = mobo['name'].upper()
             ram_type = "DDR4"
             if "DDR5" in mobo_name or " D5 " in mobo_name or any(x in mobo_name for x in ["X670", "B650", "AM5", "Z790", "A620"]):
@@ -252,27 +247,19 @@ def generate_pc_build(budget):
                 remaining -= ram['price']
                 parts['RAM'] = ram
     
-    # 4. Storage
     ssd = get_best_item(cursor, "ssds", budget * 0.10) or get_cheapest_item(cursor, "ssds")
     if ssd: remaining -= ssd['price']; parts['Storage'] = ssd
-
-    # 5. Casing
+    
     casing = get_best_item(cursor, "casings", 5000) or get_cheapest_item(cursor, "casings")
     if casing: remaining -= casing['price']; parts['Casing'] = casing
 
-    # --- PHASE 2: THE RESERVATION (Crucial Fix) ---
-    # We must reserve cash for the PSU *before* buying the GPU.
-    if budget < 60000:
-        psu_reserve = 3500 
-    elif budget < 100000:
-        psu_reserve = 5000 
-    else:
-        psu_reserve = budget * 0.10
+    # --- PHASE 2: RESERVATION (Prevents Budget Overflow) ---
+    if budget < 60000: psu_reserve = 3500 
+    elif budget < 100000: psu_reserve = 5000 
+    else: psu_reserve = budget * 0.10
 
-    # 6. GPU (Spend whatever is left MINUS the PSU reserve)
     gpu = None
-    gpu_budget = remaining - psu_reserve # Safe budget for GPU
-
+    gpu_budget = remaining - psu_reserve 
     if gpu_budget > 10000:
         gpu = get_best_item(cursor, "gpus", gpu_budget)
         if gpu: 
@@ -280,20 +267,15 @@ def generate_pc_build(budget):
             parts['Graphics Card'] = gpu
 
     # --- PHASE 3: SAFETY & PSU BUYING ---
-    estimated_watts = calculate_estimated_wattage(parts)
-    recommended_psu_watts = estimated_watts + 150 # Safety Buffer
+    # FIXED: Use the new function to calculate watts
+    breakdown_data = calculate_power_breakdown(parts) 
+    estimated_watts = breakdown_data['Total'] # Extract the number
+    recommended_psu_watts = estimated_watts + 150 
     
-    # Now we buy the PSU using the money we reserved + any leftovers from GPU
-    # We use 'remaining' here because it holds (Reserve + GPU Savings)
+    # Smart Buying Logic
     psu = get_best_item(cursor, "psus", remaining, min_watts=recommended_psu_watts)
-    
-    # Fallback if reserve was slightly too tight
-    if not psu:
-        psu = get_cheapest_item(cursor, "psus", min_watts=recommended_psu_watts)
-    
-    # Final Fallback
-    if not psu:
-         psu = get_best_item(cursor, "psus", remaining) 
+    if not psu: psu = get_cheapest_item(cursor, "psus", min_watts=recommended_psu_watts)
+    if not psu: psu = get_best_item(cursor, "psus", remaining) 
 
     if psu: 
         remaining -= psu['price']
@@ -313,24 +295,20 @@ def generate_pc_build(budget):
             current_item = parts[part_name]
             current_price = current_item['price']
             potential_budget = current_price + remaining
-            
             better_item = get_best_item(cursor, table, potential_budget, constraint)
-            
             if better_item and better_item['price'] > current_price:
                 cost_diff = better_item['price'] - current_price
                 parts[part_name] = better_item
                 remaining -= cost_diff
 
-    # Final Wattage Calculation
-    # OLD: final_watts = calculate_estimated_wattage(parts) 
-    # NEW:
-    final_breakdown = calculate_power_breakdown(parts) 
+    # Final Recalculation for UI
+    final_breakdown = calculate_power_breakdown(parts)
     
     conn.close()
     return parts, sum(p['price'] for p in parts.values()), remaining, final_breakdown
 
 # --- UI START ---
-st.title("🖥️ BD PC Builder AI v4.1")
+st.title("🖥️ BD PC Builder AI v5.0")
 st.caption("Auto-updates daily. Smart Compatibility. Wattage Safe.")
 
 query_params = st.query_params
@@ -343,7 +321,7 @@ if "budget" in query_params:
 
 budget_input = st.number_input(
     "💰 What is your Budget (BDT)?", 
-    min_value=15000, max_value=500000, step=1000, value=safe_budget, key="budget_v41"
+    min_value=15000, max_value=500000, step=1000, value=safe_budget, key="budget_v5"
 )
 
 if "build_results" not in st.session_state:
@@ -362,31 +340,20 @@ if st.session_state.build_results:
         st.divider()
         st.success(f"✅ Build Complete! Total: **{data['total']} BDT**")
         
-       # ... inside the UI loop ...
-if st.session_state.build_results:
-    data = st.session_state.build_results
-    parts = data["parts"]
-    
-    if parts:
-        st.divider()
-        st.success(f"✅ Build Complete! Total: **{data['total']} BDT**")
-        
         # --- NEW TOP BAR ---
         col1, col2 = st.columns([1, 1], gap="small")
-        
         with col1:
              share_url = f"https://bd-pc-builder.streamlit.app/?budget={budget_input}"
              if st.button("📤 Share Build", use_container_width=True):
-                 show_share_menu(share_url)
-                 
+                 show_share_menu(share_url)  
         with col2:
             # Render the Custom Hover Badge
-            breakdown = data['watts'] # This is now the dictionary
+            breakdown = data['watts']
             badge_html = render_power_badge(breakdown)
             st.markdown(badge_html, unsafe_allow_html=True)
 
         st.divider()
-        # ... Component List follows ...
+
         # --- COMPONENT LIST ---
         for part_type, item in parts.items():
             with st.container():
@@ -405,7 +372,8 @@ if st.session_state.build_results:
 
                 with col_price:
                     st.markdown(f"**{item['price']} ৳**")
-                    if item['url']: st.link_button("🛒 Buy", f"{item['url']}?ref=YOUR_ID")
+                    if item['url']: 
+                        st.link_button("🛒 Buy", f"{item['url']}?ref=YOUR_ID")
                 
                 st.divider()
                 
