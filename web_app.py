@@ -1,7 +1,7 @@
 import streamlit as st
 import sqlite3
 
-# --- PAGE SETUP ---
+# --- PAGE CONFIG ---
 st.set_page_config(
     page_title="BD PC Builder", 
     page_icon="🖥️", 
@@ -19,7 +19,7 @@ def get_db_connection():
         st.error(f"Database Error: {e}")
         return None
 
-# --- DATABASE LOGIC ---
+# --- HELPERS ---
 def get_best_item(cursor, table, max_price, spec_constraint=None):
     query = f"SELECT * FROM {table} WHERE price <= ? AND price > 0"
     params = [max_price]
@@ -35,59 +35,44 @@ def get_cheapest_item(cursor, table):
     cursor.execute(query)
     return cursor.fetchone()
 
-# --- THE POPUP MENU (DIALOG) ---
+# --- SHARE POPUP ---
 @st.dialog("📤 Share Your Build")
 def show_share_menu(link):
     st.write("Choose a platform to share your PC build:")
-    
     st.text_input("Copy Link manually:", value=link)
     
     col1, col2 = st.columns(2)
     col3, col4 = st.columns(2)
     
-    # CSS for nice buttons
     btn_style = """
         <style>
         .share-btn {
-            display: inline-block;
-            text-decoration: none;
-            color: white !important;
-            width: 100%;
-            padding: 10px;
-            text-align: center;
-            border-radius: 8px;
-            font-weight: bold;
-            margin-bottom: 10px;
+            display: inline-block; text-decoration: none; color: white !important;
+            width: 100%; padding: 10px; text-align: center; border-radius: 8px;
+            font-weight: bold; margin-bottom: 10px;
         }
         </style>
     """
     st.markdown(btn_style, unsafe_allow_html=True)
 
     with col1:
-        fb_url = f"https://www.facebook.com/sharer/sharer.php?u={link}"
-        st.markdown(f'<a href="{fb_url}" target="_blank" class="share-btn" style="background-color: #1877F2;">📘 Facebook</a>', unsafe_allow_html=True)
-
+        st.markdown(f'<a href="https://www.facebook.com/sharer/sharer.php?u={link}" target="_blank" class="share-btn" style="background-color: #1877F2;">📘 Facebook</a>', unsafe_allow_html=True)
     with col2:
-        wa_url = f"https://api.whatsapp.com/send?text=Check%20out%20this%20PC:%20{link}"
-        st.markdown(f'<a href="{wa_url}" target="_blank" class="share-btn" style="background-color: #25D366;">💬 WhatsApp</a>', unsafe_allow_html=True)
-    
+        st.markdown(f'<a href="https://api.whatsapp.com/send?text=Check%20out%20this%20PC:%20{link}" target="_blank" class="share-btn" style="background-color: #25D366;">💬 WhatsApp</a>', unsafe_allow_html=True)
     with col3:
-        mess_url = f"fb-messenger://share/?link={link}"
-        st.markdown(f'<a href="{mess_url}" target="_blank" class="share-btn" style="background-color: #0084FF;">⚡ Messenger</a>', unsafe_allow_html=True)
-
+        st.markdown(f'<a href="fb-messenger://share/?link={link}" target="_blank" class="share-btn" style="background-color: #0084FF;">⚡ Messenger</a>', unsafe_allow_html=True)
     with col4:
-        email_url = f"mailto:?subject=My PC Build&body=Check out this build: {link}"
-        st.markdown(f'<a href="{email_url}" class="share-btn" style="background-color: #555;">✉️ Email</a>', unsafe_allow_html=True)
+        st.markdown(f'<a href="mailto:?subject=My PC Build&body=Check out this build: {link}" class="share-btn" style="background-color: #555;">✉️ Email</a>', unsafe_allow_html=True)
 
-# --- MAIN LOGIC ---
+# --- BUILD LOGIC ---
 def generate_pc_build(budget):
     conn = get_db_connection()
     if not conn: return None, 0, 0
-    
     cursor = conn.cursor()
     remaining = budget
     parts = {}
     
+    # Priority List
     cpu = get_best_item(cursor, "processors", budget * 0.30) or get_cheapest_item(cursor, "processors")
     if cpu: remaining -= cpu['price']; parts['CPU'] = cpu
     
@@ -111,39 +96,37 @@ def generate_pc_build(budget):
         if gpu: remaining -= gpu['price']; parts['Graphics Card'] = gpu
     
     conn.close()
-    total_cost = sum(p['price'] for p in parts.values())
-    return parts, total_cost, remaining
+    return parts, sum(p['price'] for p in parts.values()), remaining
 
 # --- UI START ---
-st.title("🖥️ BD PC Builder AI")
+st.title("🖥️ BD PC Builder AI v2.1") # Verifying text
 st.caption("Compare prices from Star Tech & Ryans instantly.")
 
-# --- SAFE URL HANDLING ---
+# --- CRASH FIX LOGIC ---
 query_params = st.query_params
-raw_budget = 30000 
+raw_budget = 30000
 
 if "budget" in query_params:
     try:
         raw_budget = int(query_params["budget"])
     except:
-        pass 
+        pass
 
+# Force the value to be safe
 safe_budget = max(15000, min(500000, raw_budget))
 
 budget_input = st.number_input("💰 What is your Budget (BDT)?", 15000, 500000, 1000, safe_budget)
 
-# --- MEMORY HANDLING (SESSION STATE) ---
+# --- SESSION STATE MEMORY ---
 if "build_results" not in st.session_state:
     st.session_state.build_results = None
 
-# 1. Trigger Build
 if st.button("🚀 Build PC", type="primary"):
     st.query_params["budget"] = budget_input
     parts, total_cost, saved = generate_pc_build(budget_input)
-    # Save to memory!
     st.session_state.build_results = {"parts": parts, "total": total_cost, "saved": saved}
 
-# 2. Display Result (From Memory)
+# Display Results from Memory
 if st.session_state.build_results:
     data = st.session_state.build_results
     parts = data["parts"]
@@ -152,13 +135,10 @@ if st.session_state.build_results:
         st.divider()
         st.success(f"✅ Build Complete! Total: **{data['total']} BDT**")
         
-        # --- SHARE BUTTON ---
         share_url = f"https://bd-pc-builder.streamlit.app/?budget={budget_input}"
-        
         if st.button("📤 Share this Build"):
             show_share_menu(share_url)
 
-        # Parts List
         for part_type, item in parts.items():
             with st.container():
                 col1, col2 = st.columns([3, 1])
