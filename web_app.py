@@ -50,13 +50,18 @@ def get_wattage(name):
 # --- HELPER: MANDATORY GPU CHECK ---
 def is_gpu_mandatory(cpu_name):
     name = cpu_name.upper()
-    # Intel F/KF series -> Needs GPU
     if "INTEL" in name and ("F" in name.split() or "KF" in name): return True
-    # Ryzen 5000 (non-G) -> Needs GPU. (Simplification for safety)
-    # Most Ryzen 7000+ have iGPU, but Ryzen 5000 is still popular in BD.
     if "RYZEN" in name and "5" in name and "G" not in name and "7000" not in name and "8000" not in name and "9000" not in name:
          return True
     return False
+
+# --- HELPER: BOTTLENECK CALCULATOR ---
+def check_bottleneck(cpu_price, gpu_price):
+    if gpu_price == 0: return None
+    ratio = gpu_price / cpu_price
+    if ratio < 0.4:
+        return "⚠️ **Bottleneck:** GPU is too weak for this CPU."
+    return None
 
 # --- HELPER: POWER BREAKDOWN ---
 def calculate_power_breakdown(parts):
@@ -158,12 +163,12 @@ def show_share_menu(link):
 # --- MASTER BUILD LOGIC ---
 def generate_pc_build(budget, include_gpu=True, fixed_cpu=None):
     conn = get_db_connection()
-    if not conn: return None, 0, 0, 0, False
+    if not conn: return None, 0, 0, 0, False, None
     cursor = conn.cursor()
     remaining = budget
     parts = {}
     
-    # --- PHASE 1: CPU (Auto or Fixed) ---
+    # --- PHASE 1: CPU ---
     cpu = None
     if fixed_cpu:
         cpu = fixed_cpu
@@ -172,8 +177,7 @@ def generate_pc_build(budget, include_gpu=True, fixed_cpu=None):
 
     if cpu: 
         if remaining - cpu['price'] < 5000:
-            return None, 0, 0, 0, False # Budget Error
-
+            return None, 0, 0, 0, False, None
         remaining -= cpu['price']
         parts['CPU'] = dict(cpu)
         
@@ -181,11 +185,33 @@ def generate_pc_build(budget, include_gpu=True, fixed_cpu=None):
         if "INTEL" in cpu_name: cpu_type = "Intel"
         elif "AMD" in cpu_name: cpu_type = "AMD"
         else: cpu_type = None
-
         gpu_required = is_gpu_mandatory(cpu['name'])
         
-        # --- PHASE 2: MOTHERBOARD ---
-        mobo_budget = budget * 0.25 
+        # --- PHASE 2: BUDGET ALLOCATION ---
+        cash_left = remaining
+        
+        # Squeeze Logic: If cash is low (<45k) but GPU is needed
+        mobo_alloc = 0.20
+        ram_alloc = 0.10
+        ssd_alloc = 0.10
+        
+        # If CPU is expensive but budget is tight, squeeze harder
+        should_buy_gpu = include_gpu or gpu_required
+        if should_buy_gpu and cash_left < 45000:
+             mobo_alloc = 0.25 # Lower allocation (relative to cash_left)
+             ram_alloc = 0.10
+             ssd_alloc = 0.10
+        
+        if fixed_cpu:
+            mobo_budget = cash_left * mobo_alloc
+            ram_budget = cash_left * ram_alloc
+            ssd_budget = cash_left * ssd_alloc
+        else:
+            mobo_budget = budget * 0.20
+            ram_budget = budget * 0.10
+            ssd_budget = budget * 0.10
+
+        # --- MOTHERBOARD & RAM ---
         mobo = None
         if cpu_type: mobo = get_best_item(cursor, "motherboards", mobo_budget, cpu_type)
         if not mobo: mobo = get_best_item(cursor, "motherboards", mobo_budget) or get_cheapest_item(cursor, "motherboards")
@@ -198,19 +224,18 @@ def generate_pc_build(budget, include_gpu=True, fixed_cpu=None):
             if "DDR5" in mobo_name or " D5 " in mobo_name or any(x in mobo_name for x in ["X670", "B650", "AM5", "Z790", "A620"]):
                 if "D4" not in mobo_name: ram_type = "DDR5"
             
-            ram = get_best_item(cursor, "rams", budget * 0.10, ram_type) or get_best_item(cursor, "rams", budget * 0.10, "DDR4") or get_cheapest_item(cursor, "rams")
+            ram = get_best_item(cursor, "rams", ram_budget, ram_type) or get_best_item(cursor, "rams", ram_budget, "DDR4") or get_cheapest_item(cursor, "rams")
             if ram: remaining -= ram['price']; parts['RAM'] = dict(ram)
     
     # --- PHASE 3: STORAGE & CASING ---
-    ssd = get_best_item(cursor, "ssds", budget * 0.10) or get_cheapest_item(cursor, "ssds")
+    ssd = get_best_item(cursor, "ssds", ssd_budget) or get_cheapest_item(cursor, "ssds")
     if ssd: remaining -= ssd['price']; parts['Storage'] = dict(ssd)
     
     casing = get_best_item(cursor, "casings", 5000) or get_cheapest_item(cursor, "casings")
     if casing: remaining -= casing['price']; parts['Casing'] = dict(casing)
 
     # --- PHASE 4: GPU & PSU ---
-    # FORCE GPU if Mandatory
-    should_buy_gpu = include_gpu or gpu_required
+    advice_msg = None # Stores the advice for the user
 
     if should_buy_gpu:
         if budget < 60000: psu_reserve = 3500 
@@ -220,10 +245,29 @@ def generate_pc_build(budget, include_gpu=True, fixed_cpu=None):
         gpu = None
         gpu_budget = remaining - psu_reserve 
         
-        if gpu_budget > 10000:
+        # THE ADVISOR LOGIC 💡
+        # If we have money for ANY GPU, we buy it first.
+        if gpu_budget > 5000:
             gpu = get_best_item(cursor, "gpus", gpu_budget)
-            if gpu: remaining -= gpu['price']; parts['Graphics Card'] = dict(gpu)
-    
+            if gpu: 
+                remaining -= gpu['price']
+                parts['Graphics Card'] = dict(gpu)
+                
+                # Check for severe imbalance
+                if gpu['price'] < (parts['CPU']['price'] * 0.5):
+                    needed = int((parts['CPU']['price'] * 0.8) - gpu['price'])
+                    advice_msg = f"💡 **Advisor:** This GPU is weak for your CPU. Consider **increasing budget by {needed} BDT** for a balanced card."
+                    if not gpu_required:
+                         advice_msg += " OR **Uncheck 'Include GPU'** to use Integrated Graphics and save for later."
+
+        else:
+            # We CANNOT afford a GPU.
+            if gpu_required:
+                needed = 15000 - gpu_budget # Aim for at least 15k
+                advice_msg = f"❌ **Budget Crisis:** Cannot afford a dedicated GPU for this CPU! **Please add ~{int(needed)} BDT** to your budget."
+            else:
+                advice_msg = "💡 **Advisor:** Budget is too tight for a decent GPU. We skipped it. Use the CPU's Integrated Graphics and save up!"
+
     breakdown_data = calculate_power_breakdown(parts) 
     estimated_watts = breakdown_data['Total']
     recommended_psu_watts = estimated_watts + 150 
@@ -252,11 +296,11 @@ def generate_pc_build(budget, include_gpu=True, fixed_cpu=None):
 
     final_breakdown = calculate_power_breakdown(parts)
     conn.close()
-    return parts, sum(p['price'] for p in parts.values()), remaining, final_breakdown, gpu_required
+    return parts, sum(p['price'] for p in parts.values()), remaining, final_breakdown, gpu_required, advice_msg
 
 # --- UI START ---
-st.title("🖥️ BD PC Builder AI v8.1")
-st.caption("CPU-First Mode. Smart Configurator. Safety Locked.")
+st.title("🖥️ BD PC Builder AI v9.1")
+st.caption("Smart Advisor. Budget Crisis Detection.")
 
 query_params = st.query_params
 safe_budget = 40000
@@ -264,11 +308,10 @@ if "budget" in query_params:
     try: safe_budget = int(query_params["budget"])
     except: pass
 
-# --- ADVANCED INPUT SECTION ---
 with st.container():
     col1, col2 = st.columns([1, 1])
     with col1:
-        budget_input = st.number_input("💰 Budget (BDT)", min_value=15000, max_value=800000, step=1000, value=safe_budget, key="budget_v8")
+        budget_input = st.number_input("💰 Budget (BDT)", min_value=15000, max_value=800000, step=1000, value=safe_budget, key="budget_v9")
     with col2:
         cpu_choice_mode = st.radio("CPU Selection:", ["🤖 AI Decides", "🎯 I Choose"], horizontal=True)
 
@@ -280,17 +323,13 @@ with st.container():
         cpu_selection = st.selectbox("Select your Processor:", all_cpus, help="The AI will build the rest of the PC around this CPU.")
         if cpu_selection:
             selected_cpu_obj = get_cpu_object(cpu_selection)
-            # CHECK IF THIS CPU REQUIRES GPU
             if selected_cpu_obj and is_gpu_mandatory(selected_cpu_obj['name']):
                 is_locked = True
                 st.info(f"🔒 **Locked:** {selected_cpu_obj['name']} requires a Graphics Card.")
 
-    # GPU CHECKBOX LOGIC (SAFETY LOCK)
     if is_locked:
-        # If locked, force True and disable interactivity
         include_gpu_check = st.checkbox("Include Graphics Card?", value=True, disabled=True, help="This CPU requires a GPU to display video.")
     else:
-        # Standard toggle
         include_gpu_check = st.checkbox("Include Graphics Card?", value=True)
 
 if "build_results" not in st.session_state: st.session_state.build_results = None
@@ -298,12 +337,12 @@ if "build_results" not in st.session_state: st.session_state.build_results = Non
 if st.button("🚀 Build PC", type="primary", use_container_width=True):
     st.query_params["budget"] = budget_input
     
-    parts, total_cost, saved, watts, gpu_forced = generate_pc_build(budget_input, include_gpu_check, fixed_cpu=selected_cpu_obj)
+    parts, total_cost, saved, watts, gpu_forced, advice = generate_pc_build(budget_input, include_gpu_check, fixed_cpu=selected_cpu_obj)
     
     if parts is None:
         st.error(f"❌ Impossible Build! The CPU you selected costs more than your entire budget. Please increase budget.")
     else:
-        st.session_state.build_results = {"parts": parts, "total": total_cost, "saved": saved, "watts": watts, "gpu_forced": gpu_forced}
+        st.session_state.build_results = {"parts": parts, "total": total_cost, "saved": saved, "watts": watts, "gpu_forced": gpu_forced, "advice": advice}
 
 if st.session_state.build_results:
     data = st.session_state.build_results
@@ -313,9 +352,17 @@ if st.session_state.build_results:
     
     if parts:
         st.divider()
+        # --- SMART ADVICE SECTION ---
+        if data.get("advice"):
+             # If it's a Crisis/Warning
+             if "Crisis" in data["advice"] or "Bottleneck" in data["advice"]:
+                 st.error(data["advice"])
+             else:
+                 st.info(data["advice"])
+                 
         if data.get("gpu_forced") and not is_locked:
              st.warning("⚠️ GPU was added automatically because the AI selected a CPU without Integrated Graphics.")
-            
+             
         col_res1, col_res2, col_res3 = st.columns([2, 1, 1])
         with col_res1: st.success(f"✅ Total: **{current_total} BDT**")
         with col_res2:
