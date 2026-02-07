@@ -65,7 +65,7 @@ def show_share_menu(link):
         st.markdown(f'<a href="mailto:?subject=My PC Build&body=Check out this build: {link}" class="share-btn" style="background-color: #555;">✉️ Email</a>', unsafe_allow_html=True)
 
 # --- BUILD LOGIC ---
-# --- SMART BUILD LOGIC ---
+# --- SMART BUILD LOGIC v2 (Fixes DDR5 Issue) ---
 def generate_pc_build(budget):
     conn = get_db_connection()
     if not conn: return None, 0, 0
@@ -74,33 +74,30 @@ def generate_pc_build(budget):
     remaining = budget
     parts = {}
     
-    # 1. CPU (The Brain) - 30% of budget
-   # 1. CPU (The Brain)
+    # 1. CPU (The Brain)
+    # We try to get the best CPU for 30% of budget
     cpu = get_best_item(cursor, "processors", budget * 0.30) or get_cheapest_item(cursor, "processors")
     
     if cpu: 
         remaining -= cpu['price']
         parts['CPU'] = cpu
         
-        # --- SMART FIX: Detect Type from Name ---
-        # (This ensures we don't rely on empty database tags)
+        # Detect CPU Type (Intel vs AMD)
         cpu_name = cpu['name'].upper()
         if "INTEL" in cpu_name:
             cpu_type = "Intel"
         elif "AMD" in cpu_name or "RYZEN" in cpu_name:
             cpu_type = "AMD"
         else:
-            cpu_type = None # Unknown
+            cpu_type = None
 
-        # 2. Motherboard (Must match CPU)
+        # 2. Motherboard
         mobo_budget = budget * 0.20
         mobo = None
         
         if cpu_type:
-            # Try to find a matching board (e.g., Intel -> Intel)
             mobo = get_best_item(cursor, "motherboards", mobo_budget, cpu_type)
         
-        # Fallback: If no match found, just get the best available
         if not mobo:
             mobo = get_best_item(cursor, "motherboards", mobo_budget) or get_cheapest_item(cursor, "motherboards")
             
@@ -108,30 +105,50 @@ def generate_pc_build(budget):
             remaining -= mobo['price']
             parts['Motherboard'] = mobo
             
-            # 3. RAM (Check for DDR5 support)
-            # If the motherboard name says "DDR5", we MUST pick DDR5 RAM.
-            ram_type = "DDR4" # Default
-            if "DDR5" in mobo['name'].upper():
+            # --- INTELLIGENT RAM SELECTION ---
+            mobo_name = mobo['name'].upper()
+            ram_type = "DDR4" # Default fallback
+            
+            # Condition A: Explicitly says "DDR5" or "D5"
+            if "DDR5" in mobo_name or " D5 " in mobo_name:
                 ram_type = "DDR5"
             
-            ram = get_best_item(cursor, "rams", budget * 0.10, ram_type) or get_cheapest_item(cursor, "rams")
+            # Condition B: Implicit DDR5 Chipsets (AM5 is ALWAYS DDR5)
+            # X670, B650, A620 are AMD's new DDR5-only chipsets
+            elif any(x in mobo_name for x in ["X670", "B650", "A620", "AM5", "Z790", "Z690"]):
+                # Note: Z790/Z690 can be DDR4, but usually high-end ones are DDR5.
+                # If the name DOES NOT say "D4" or "DDR4", we assume DDR5 for these high-end boards.
+                if "D4" not in mobo_name and "DDR4" not in mobo_name:
+                    ram_type = "DDR5"
+            
+            # Fetch the RAM
+            ram = get_best_item(cursor, "rams", budget * 0.10, ram_type)
+            
+            # Fallback: If we looked for DDR5 but found nothing (maybe out of stock?), try DDR4
+            if not ram and ram_type == "DDR5":
+                ram = get_best_item(cursor, "rams", budget * 0.10, "DDR4")
+            
+            # Final Fallback: Cheapest RAM
+            if not ram:
+                ram = get_cheapest_item(cursor, "rams")
+
             if ram:
                 remaining -= ram['price']
                 parts['RAM'] = ram
     
-    # 4. Storage (SSD) - Universal
+    # 4. Storage
     ssd = get_best_item(cursor, "ssds", budget * 0.10) or get_cheapest_item(cursor, "ssds")
     if ssd: remaining -= ssd['price']; parts['Storage'] = ssd
 
-    # 5. PSU - Universal
+    # 5. PSU
     psu = get_best_item(cursor, "psus", budget * 0.10) or get_cheapest_item(cursor, "psus")
     if psu: remaining -= psu['price']; parts['Power Supply'] = psu
     
-    # 6. Casing - Universal
+    # 6. Casing
     casing = get_best_item(cursor, "casings", 4000) or get_cheapest_item(cursor, "casings")
     if casing: remaining -= casing['price']; parts['Casing'] = casing
 
-    # 7. GPU (The Muscle) - Takes whatever is left!
+    # 7. GPU (Rest of the money)
     if remaining > 10000:
         gpu = get_best_item(cursor, "gpus", remaining)
         if gpu: remaining -= gpu['price']; parts['Graphics Card'] = gpu
