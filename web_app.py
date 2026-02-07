@@ -162,12 +162,25 @@ def generate_pc_build(budget):
     estimated_watts = calculate_estimated_wattage(parts)
     recommended_psu_watts = estimated_watts + 150 # Add 150W headroom for safety
 
-    psu_budget = max(budget * 0.10, 4000)
-    if remaining < 0: psu_budget = 3000
+    # --- SMART BUDGET CAP (The Fix) ---
+    # Don't spend 10% blindly. Cap it for mid-range builds.
+    if budget < 60000:
+        psu_cap = 3500  # Enough for 450W decent PSU
+    elif budget < 100000:
+        psu_cap = 5000  # Enough for 550W/650W Bronze
+    else:
+        psu_cap = budget * 0.10 # Unlock premium budget for high-end builds
     
-    psu = get_best_item(cursor, "psus", psu_budget, min_watts=recommended_psu_watts)
-    if not psu: psu = get_cheapest_item(cursor, "psus", min_watts=recommended_psu_watts)
-    if not psu: psu = get_best_item(cursor, "psus", psu_budget) # Last resort
+    # Try to find the BEST PSU that fits in our SMART CAP
+    psu = get_best_item(cursor, "psus", psu_cap, min_watts=recommended_psu_watts)
+    
+    # Fallback 1: If Smart Cap was too tight, try the cheapest SAFE option (ignore cap)
+    if not psu:
+        psu = get_cheapest_item(cursor, "psus", min_watts=recommended_psu_watts)
+        
+    # Fallback 2: If still nothing (very rare), just get best available
+    if not psu:
+         psu = get_best_item(cursor, "psus", budget * 0.10) 
 
     if psu: 
         remaining -= psu['price']
