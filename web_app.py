@@ -28,54 +28,56 @@ def get_wattage(name):
         return int(match.group(1))
     return 0 
 
-# --- HELPER: ROBUST POWER CALCULATOR ---
-def calculate_estimated_wattage(parts):
-    """Calculates MAX PEAK power draw (TDP + Turbo limits + Safety Buffer)"""
-    total_draw = 100 # Base System (Mobo, RAM, SSD, Fans, RGB, AIO Pump)
+# --- HELPER: DETAILED POWER CALCULATOR ---
+def calculate_power_breakdown(parts):
+    """Calculates power draw and returns the detailed breakdown"""
+    breakdown = {
+        "Base System": 100, # Motherboard, Fans, RAM, RGB
+        "CPU": 0,
+        "GPU": 0,
+        "Storage": 0,
+        "Total": 0
+    }
     
-    # 1. CPU Power (Using Max Turbo Power / PL2, not base TDP)
+    # 1. CPU Power
     if 'CPU' in parts:
         name = parts['CPU']['name'].upper()
-        if "I9" in name or "RYZEN 9" in name: total_draw += 300 # i9s can spike huge
-        elif "I7" in name or "RYZEN 7" in name: total_draw += 250
-        elif "I5" in name or "RYZEN 5" in name: total_draw += 150
-        else: total_draw += 100 # i3 / Basic
+        watts = 65 # Base
+        if "I9" in name or "RYZEN 9" in name: watts = 280
+        elif "I7" in name or "RYZEN 7" in name: watts = 220
+        elif "I5" in name or "RYZEN 5" in name: watts = 140
+        elif "I3" in name or "RYZEN 3" in name: watts = 90
+        breakdown["CPU"] = watts
         
-    # 2. GPU Power (Using TGP + Overclock headroom)
+    # 2. GPU Power
     if 'Graphics Card' in parts:
         name = parts['Graphics Card']['name'].upper()
-        
-        # NVIDIA High End
-        if "4090" in name: total_draw += 500
-        elif "4080" in name: total_draw += 350
-        elif "4070" in name: # Covers Ti, Super, and non-Ti
-            if "TI" in name or "SUPER" in name: total_draw += 300
-            else: total_draw += 240
-            
-        # NVIDIA Mid/Low
-        elif "4060" in name or "3060" in name: total_draw += 180
-        elif "3050" in name: total_draw += 140
-        elif "1660" in name or "1650" in name: total_draw += 130
-        elif "3070" in name or "3080" in name: total_draw += 350 # Older gen was power hungry
-        
-        # AMD High End
-        elif "7900" in name: total_draw += 360
-        elif "7800" in name or "6900" in name or "6800" in name: total_draw += 300
-        elif "7700" in name or "6700" in name: total_draw += 260
-        elif "7600" in name or "6600" in name: total_draw += 180
-        
-        # INTEL ARC
-        elif "A770" in name or "A750" in name: total_draw += 230
-        
-        else: 
-            # Fallback for unknown powerful cards found in 300k builds
-            total_draw += 250 
+        watts = 50 # Base generic
+        # NVIDIA
+        if "4090" in name: watts = 480
+        elif "4080" in name: watts = 340
+        elif "4070" in name: watts = 285 if "TI" in name else 220
+        elif "4060" in name: watts = 160
+        elif "3090" in name: watts = 400
+        elif "3080" in name: watts = 340
+        elif "3070" in name: watts = 240
+        elif "3060" in name: watts = 180
+        elif "3050" in name: watts = 140
+        # AMD
+        elif "7900" in name: watts = 360
+        elif "7800" in name: watts = 290
+        elif "7700" in name: watts = 250
+        elif "7600" in name: watts = 180
+        elif "6900" in name or "6800" in name: watts = 300
+        breakdown["GPU"] = watts
 
-    # 3. Storage & Extras
+    # 3. Storage
     if 'Storage' in parts:
-        total_draw += 15 # NVMe drive under load
+        breakdown["Storage"] = 15
         
-    return total_draw
+    # Calculate Total
+    breakdown["Total"] = sum(breakdown.values())
+    return breakdown
 
 # --- HELPER: DATABASE FETCHERS ---
 def get_best_item(cursor, table, max_price, spec_constraint=None, min_watts=0):
