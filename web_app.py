@@ -65,7 +65,7 @@ def show_share_menu(link):
         st.markdown(f'<a href="mailto:?subject=My PC Build&body=Check out this build: {link}" class="share-btn" style="background-color: #555;">✉️ Email</a>', unsafe_allow_html=True)
 
 # --- BUILD LOGIC ---
-# --- SMART BUILD LOGIC v2 (Fixes DDR5 Issue) ---
+# --- OPTIMIZED BUILD LOGIC (With "Budget Sweeper") ---
 def generate_pc_build(budget):
     conn = get_db_connection()
     if not conn: return None, 0, 0
@@ -74,64 +74,37 @@ def generate_pc_build(budget):
     remaining = budget
     parts = {}
     
-    # 1. CPU (The Brain)
-    # We try to get the best CPU for 30% of budget
-    cpu = get_best_item(cursor, "processors", budget * 0.30) or get_cheapest_item(cursor, "processors")
+    # --- PHASE 1: INITIAL DRAFT (The Standard Build) ---
     
+    # 1. CPU
+    cpu = get_best_item(cursor, "processors", budget * 0.30) or get_cheapest_item(cursor, "processors")
     if cpu: 
         remaining -= cpu['price']
         parts['CPU'] = cpu
         
-        # Detect CPU Type (Intel vs AMD)
+        # Smart Type Detection
         cpu_name = cpu['name'].upper()
-        if "INTEL" in cpu_name:
-            cpu_type = "Intel"
-        elif "AMD" in cpu_name or "RYZEN" in cpu_name:
-            cpu_type = "AMD"
-        else:
-            cpu_type = None
+        if "INTEL" in cpu_name: cpu_type = "Intel"
+        elif "AMD" in cpu_name or "RYZEN" in cpu_name: cpu_type = "AMD"
+        else: cpu_type = None
 
         # 2. Motherboard
         mobo_budget = budget * 0.20
         mobo = None
-        
-        if cpu_type:
-            mobo = get_best_item(cursor, "motherboards", mobo_budget, cpu_type)
-        
-        if not mobo:
-            mobo = get_best_item(cursor, "motherboards", mobo_budget) or get_cheapest_item(cursor, "motherboards")
+        if cpu_type: mobo = get_best_item(cursor, "motherboards", mobo_budget, cpu_type)
+        if not mobo: mobo = get_best_item(cursor, "motherboards", mobo_budget) or get_cheapest_item(cursor, "motherboards")
             
         if mobo:
             remaining -= mobo['price']
             parts['Motherboard'] = mobo
             
-            # --- INTELLIGENT RAM SELECTION ---
+            # 3. RAM
             mobo_name = mobo['name'].upper()
-            ram_type = "DDR4" # Default fallback
+            ram_type = "DDR4"
+            if "DDR5" in mobo_name or " D5 " in mobo_name or any(x in mobo_name for x in ["X670", "B650", "AM5", "Z790"]):
+                if "D4" not in mobo_name: ram_type = "DDR5"
             
-            # Condition A: Explicitly says "DDR5" or "D5"
-            if "DDR5" in mobo_name or " D5 " in mobo_name:
-                ram_type = "DDR5"
-            
-            # Condition B: Implicit DDR5 Chipsets (AM5 is ALWAYS DDR5)
-            # X670, B650, A620 are AMD's new DDR5-only chipsets
-            elif any(x in mobo_name for x in ["X670", "B650", "A620", "AM5", "Z790", "Z690"]):
-                # Note: Z790/Z690 can be DDR4, but usually high-end ones are DDR5.
-                # If the name DOES NOT say "D4" or "DDR4", we assume DDR5 for these high-end boards.
-                if "D4" not in mobo_name and "DDR4" not in mobo_name:
-                    ram_type = "DDR5"
-            
-            # Fetch the RAM
-            ram = get_best_item(cursor, "rams", budget * 0.10, ram_type)
-            
-            # Fallback: If we looked for DDR5 but found nothing (maybe out of stock?), try DDR4
-            if not ram and ram_type == "DDR5":
-                ram = get_best_item(cursor, "rams", budget * 0.10, "DDR4")
-            
-            # Final Fallback: Cheapest RAM
-            if not ram:
-                ram = get_cheapest_item(cursor, "rams")
-
+            ram = get_best_item(cursor, "rams", budget * 0.10, ram_type) or get_best_item(cursor, "rams", budget * 0.10, "DDR4") or get_cheapest_item(cursor, "rams")
             if ram:
                 remaining -= ram['price']
                 parts['RAM'] = ram
@@ -145,14 +118,42 @@ def generate_pc_build(budget):
     if psu: remaining -= psu['price']; parts['Power Supply'] = psu
     
     # 6. Casing
-    casing = get_best_item(cursor, "casings", 4000) or get_cheapest_item(cursor, "casings")
+    casing = get_best_item(cursor, "casings", 5000) or get_cheapest_item(cursor, "casings")
     if casing: remaining -= casing['price']; parts['Casing'] = casing
 
-    # 7. GPU (Rest of the money)
+    # 7. GPU (Takes the bulk of remaining cash)
     if remaining > 10000:
         gpu = get_best_item(cursor, "gpus", remaining)
         if gpu: remaining -= gpu['price']; parts['Graphics Card'] = gpu
     
+    # --- PHASE 2: THE "BUDGET SWEEPER" (Spend the Leftover Cash) ---
+    # Try to upgrade components in this specific order of importance:
+    upgrade_order = [
+        ('Graphics Card', 'gpus', None),      # 1. Try to get a better GPU
+        ('CPU', 'processors', None),         # 2. Try to get a better CPU
+        ('RAM', 'rams', ram_type),           # 3. Try to get better/more RAM
+        ('Storage', 'ssds', None),           # 4. Try to get a bigger SSD
+        ('Motherboard', 'motherboards', cpu_type) # 5. Better Mobo
+    ]
+
+    for part_name, table, constraint in upgrade_order:
+        if part_name in parts and remaining > 1000: # Only if we have some cash
+            current_item = parts[part_name]
+            current_price = current_item['price']
+            
+            # Calculate new max budget for this part (Current Price + Leftover Cash)
+            potential_budget = current_price + remaining
+            
+            # Search for a better item
+            better_item = get_best_item(cursor, table, potential_budget, constraint)
+            
+            # If found item is pricier (better) than current one
+            if better_item and better_item['price'] > current_price:
+                cost_diff = better_item['price'] - current_price
+                parts[part_name] = better_item # Swap it!
+                remaining -= cost_diff # Deduct the cost
+                # print(f"✨ Upgraded {part_name}! Used {cost_diff} extra.") 
+
     conn.close()
     return parts, sum(p['price'] for p in parts.values()), remaining
 # --- UI START ---
