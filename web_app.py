@@ -98,7 +98,7 @@ def generate_pc_build(budget):
     return parts, sum(p['price'] for p in parts.values()), remaining
 
 # --- UI START ---
-st.title("🖥️ BD PC Builder AI v3.0") # Changed to v3.0 to verify update
+st.title("🖥️ BD PC Builder AI v3.0")
 st.caption("Compare prices from Star Tech & Ryans instantly.")
 
 # --- SAFE URL HANDLING ---
@@ -114,14 +114,14 @@ if "budget" in query_params:
 # Force the value to be safe
 safe_budget = max(15000, min(500000, raw_budget))
 
-# KEY="BUDGET_V2" FORCES A RESET OF THE WIDGET
+# KEY="BUDGET_V3" FORCES A RESET OF THE WIDGET
 budget_input = st.number_input(
     "💰 What is your Budget (BDT)?", 
     min_value=15000, 
     max_value=500000, 
     step=1000, 
     value=safe_budget,
-    key="budget_v2"
+    key="budget_v3"
 )
 
 # --- SESSION STATE MEMORY ---
@@ -146,14 +146,28 @@ if st.session_state.build_results:
         if st.button("📤 Share this Build"):
             show_share_menu(share_url)
 
+        # --- NEW: IMAGE LAYOUT ---
         for part_type, item in parts.items():
             with st.container():
-                col1, col2 = st.columns([3, 1])
-                col1.markdown(f"**{part_type}**")
-                col1.caption(item['name'])
-                col2.markdown(f"**{item['price']} ৳**")
-                if item['url']:
-                    col2.link_button("🛒 Buy", f"{item['url']}?ref=YOUR_ID")
+                # Create 3 columns: Image | Details | Price
+                col_img, col_details, col_price = st.columns([1, 2, 1])
+                
+                with col_img:
+                    # Show image if available, otherwise show emoji
+                    if item['image_url']:
+                        st.image(item['image_url'], width=80)
+                    else:
+                        st.write("📦")
+
+                with col_details:
+                    st.markdown(f"**{part_type}**")
+                    st.caption(item['name'])
+
+                with col_price:
+                    st.markdown(f"**{item['price']} ৳**")
+                    if item['url']:
+                        st.link_button("🛒 Buy", f"{item['url']}?ref=YOUR_ID")
+                
                 st.divider()
                 
         if data["saved"] > 0:
