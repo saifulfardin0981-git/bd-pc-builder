@@ -115,6 +115,25 @@ if "budget" in query_params:
 # Force the value to be safe
 safe_budget = max(15000, min(500000, raw_budget))
 
+# WE ADDED key="budget_v2" TO RESET THE WIDGET MEMORY
+budget_input = st.number_input(
+    "💰 What is your Budget (BDT)?", 
+    min_value=15000, 
+    max_value=500000, 
+    step=1000, 
+    value=safe_budget,
+    key="budget_v2" 
+)
+
+if "budget" in query_params:
+    try:
+        raw_budget = int(query_params["budget"])
+    except:
+        pass
+
+# Force the value to be safe
+safe_budget = max(15000, min(500000, raw_budget))
+
 budget_input = st.number_input("💰 What is your Budget (BDT)?", 15000, 500000, 1000, safe_budget)
 
 # --- SESSION STATE MEMORY ---
