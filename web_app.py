@@ -88,29 +88,31 @@ def get_cheapest_item(cursor, table, min_watts=0):
         return valid_psus[0] if valid_psus else None
     return rows[0] if rows else None
 
-# --- NEW HELPER: GET ALTERNATIVES (For Swapping) ---
-def get_alternatives(table, current_price, spec_constraint=None):
+# --- IMPROVED SWAP HELPER (Fixes CPU Issue) ---
+def get_alternatives(table, current_price, name_search=None):
     conn = get_db_connection()
     if not conn: return []
     cursor = conn.cursor()
     
-    # Logic: Show items within 50% to 200% of current price
+    # Range: 50% cheap to 300% expensive (Wider range to see upgrades)
     min_price = current_price * 0.5
-    max_price = current_price * 2.0
+    max_price = current_price * 3.0
     
     query = f"SELECT * FROM {table} WHERE price BETWEEN ? AND ?"
     params = [min_price, max_price]
     
-    if spec_constraint:
-        query += " AND spec_tag LIKE ?"
-        params.append(f"%{spec_constraint}%")
+    # Search by NAME, not Tag (Fixes CPU Issue)
+    if name_search:
+        query += " AND name LIKE ?"
+        params.append(f"%{name_search}%")
         
-    query += " ORDER BY price ASC LIMIT 15" # Show 15 options
+    # Sort DESC (Most expensive/best first) and show MORE items (50)
+    query += " ORDER BY price DESC LIMIT 50" 
+    
     cursor.execute(query, params)
     rows = cursor.fetchall()
     conn.close()
     
-    # Convert Row objects to dicts so they are serializable
     return [dict(row) for row in rows]
 
 # --- HOVER BADGE ---
@@ -145,7 +147,7 @@ def generate_pc_build(budget):
     cpu = get_best_item(cursor, "processors", budget * 0.30) or get_cheapest_item(cursor, "processors")
     if cpu: 
         remaining -= cpu['price']
-        parts['CPU'] = dict(cpu) # Convert to dict for mutability
+        parts['CPU'] = dict(cpu)
         
         cpu_name = cpu['name'].upper()
         if "INTEL" in cpu_name: cpu_type = "Intel"
@@ -211,7 +213,7 @@ def generate_pc_build(budget):
     return parts, sum(p['price'] for p in parts.values()), remaining, final_breakdown
 
 # --- UI START ---
-st.title("🖥️ BD PC Builder AI v6.0")
+st.title("🖥️ BD PC Builder AI v6.1")
 st.caption("Smart Configurator. Wattage Safe. Edit Freedom.")
 
 query_params = st.query_params
@@ -220,7 +222,7 @@ if "budget" in query_params:
     try: safe_budget = int(query_params["budget"])
     except: pass
 
-budget_input = st.number_input("💰 What is your Budget (BDT)?", min_value=15000, max_value=500000, step=1000, value=safe_budget, key="budget_v6")
+budget_input = st.number_input("💰 What is your Budget (BDT)?", min_value=15000, max_value=500000, step=1000, value=safe_budget, key="budget_v61")
 
 if "build_results" not in st.session_state: st.session_state.build_results = None
 
@@ -232,8 +234,6 @@ if st.button("🚀 Build PC", type="primary"):
 if st.session_state.build_results:
     data = st.session_state.build_results
     parts = data["parts"]
-    
-    # Recalculate totals (in case of swaps)
     current_total = sum(p['price'] for p in parts.values())
     current_breakdown = calculate_power_breakdown(parts)
     
@@ -256,7 +256,6 @@ if st.session_state.build_results:
         st.divider()
 
         # --- COMPONENT LIST WITH EDIT ---
-        # Map nice names to DB tables for querying alternatives
         table_map = {
             'CPU': 'processors', 'Motherboard': 'motherboards', 'RAM': 'rams',
             'Storage': 'ssds', 'Graphics Card': 'gpus', 'Power Supply': 'psus', 'Casing': 'casings'
@@ -278,40 +277,51 @@ if st.session_state.build_results:
                     st.markdown(f"**{item['price']} ৳**")
                     if item.get('url'): st.link_button("🛒", f"{item['url']}?ref=YOUR_ID")
                 
-                # --- SWAP BUTTON LOGIC ---
                 with col_action:
-                    # Determine constraints for safe swapping
+                    # FIX: Search by NAME ("Intel"/"AMD"), not Tag
                     constraint = None
                     if part_type == 'CPU': 
                         if "INTEL" in item['name'].upper(): constraint = "Intel"
-                        elif "AMD" in item['name'].upper(): constraint = "AMD"
+                        elif "AMD" in item['name'].upper() or "RYZEN" in item['name'].upper(): constraint = "AMD" # Or "Ryzen"
                     elif part_type == 'Motherboard':
-                        if "INTEL" in parts['CPU']['name'].upper(): constraint = "Intel"
-                        elif "AMD" in parts['CPU']['name'].upper(): constraint = "AMD"
+                        # Use CPU name to constrain Mobo swap
+                        cpu_name = parts['CPU']['name'].upper()
+                        if "INTEL" in cpu_name: constraint = "Intel"
+                        elif "AMD" in cpu_name or "RYZEN" in cpu_name: constraint = "AMD" 
                     elif part_type == 'RAM':
                         constraint = "DDR5" if "DDR5" in parts['Motherboard']['name'].upper() else "DDR4"
                     
-                    # The Popover Menu
                     with st.popover("🔄"):
                         st.markdown(f"**Swap {part_type}**")
                         table_name = table_map.get(part_type)
                         if table_name:
+                            # Pass constraint as 'name_search'
                             alts = get_alternatives(table_name, item['price'], constraint)
-                            if alts:
-                                # Create a dict to map Names back to Item Objects
-                                alt_map = {f"{a['name'][:40]}... ({a['price']} ৳)": a for a in alts}
-                                selected_name = st.selectbox("Choose:", list(alt_map.keys()), key=f"sel_{part_type}")
+                            
+                            # Insert Current Item at Top (So it's never missing!)
+                            alts.insert(0, item) 
+                            
+                            # Deduplicate (in case current item was also found in DB query)
+                            seen = set()
+                            unique_alts = []
+                            for a in alts:
+                                if a['name'] not in seen:
+                                    unique_alts.append(a)
+                                    seen.add(a['name'])
+
+                            if unique_alts:
+                                alt_map = {f"{a['name'][:40]}... ({a['price']} ৳)": a for a in unique_alts}
+                                # Default to index 0 (current item)
+                                selected_name = st.selectbox("Choose:", list(alt_map.keys()), index=0, key=f"sel_{part_type}")
                                 
                                 if st.button("Confirm", key=f"btn_{part_type}"):
-                                    new_part = alt_map[selected_name]
-                                    st.session_state.build_results['parts'][part_type] = new_part
-                                    st.rerun() # Refresh UI
+                                    st.session_state.build_results['parts'][part_type] = alt_map[selected_name]
+                                    st.rerun()
                             else:
-                                st.warning("No compatible alternatives found.")
+                                st.warning("No alternatives found.")
 
                 st.divider()
                 
-        # Calculate Unused (Live)
         live_unused = budget_input - current_total
         if live_unused > 0: st.warning(f"💵 Unused Budget: {live_unused} BDT")
         elif live_unused < 0: st.error(f"⚠️ Over Budget: {abs(live_unused)} BDT")
