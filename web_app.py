@@ -107,7 +107,7 @@ def show_share_menu(link):
     with col3: st.markdown(f'<a href="fb-messenger://share/?link={link}" target="_blank" class="share-btn" style="background-color: #0084FF;">⚡ Messenger</a>', unsafe_allow_html=True)
     with col4: st.markdown(f'<a href="mailto:?subject=My PC Build&body=Check out this build: {link}" class="share-btn" style="background-color: #555;">✉️ Email</a>', unsafe_allow_html=True)
 
-# --- MASTER BUILD LOGIC ---
+# --- MASTER BUILD LOGIC (Balanced Version) ---
 def generate_pc_build(budget):
     conn = get_db_connection()
     if not conn: return None, 0, 0, 0
@@ -117,15 +117,19 @@ def generate_pc_build(budget):
     parts = {}
     
     # --- PHASE 1: CORE COMPONENTS ---
+    
+    # 1. CPU
     cpu = get_best_item(cursor, "processors", budget * 0.30) or get_cheapest_item(cursor, "processors")
     if cpu: 
         remaining -= cpu['price']
         parts['CPU'] = cpu
+        
         cpu_name = cpu['name'].upper()
         if "INTEL" in cpu_name: cpu_type = "Intel"
         elif "AMD" in cpu_name or "RYZEN" in cpu_name: cpu_type = "AMD"
         else: cpu_type = None
 
+        # 2. Motherboard
         mobo_budget = budget * 0.20
         mobo = None
         if cpu_type: mobo = get_best_item(cursor, "motherboards", mobo_budget, cpu_type)
@@ -134,6 +138,8 @@ def generate_pc_build(budget):
         if mobo:
             remaining -= mobo['price']
             parts['Motherboard'] = mobo
+            
+            # 3. RAM
             mobo_name = mobo['name'].upper()
             ram_type = "DDR4"
             if "DDR5" in mobo_name or " D5 " in mobo_name or any(x in mobo_name for x in ["X670", "B650", "AM5", "Z790", "A620"]):
@@ -144,49 +150,54 @@ def generate_pc_build(budget):
                 remaining -= ram['price']
                 parts['RAM'] = ram
     
+    # 4. Storage
     ssd = get_best_item(cursor, "ssds", budget * 0.10) or get_cheapest_item(cursor, "ssds")
     if ssd: remaining -= ssd['price']; parts['Storage'] = ssd
-    
+
+    # 5. Casing
     casing = get_best_item(cursor, "casings", 5000) or get_cheapest_item(cursor, "casings")
     if casing: remaining -= casing['price']; parts['Casing'] = casing
 
+    # --- PHASE 2: THE RESERVATION (Crucial Fix) ---
+    # We must reserve cash for the PSU *before* buying the GPU.
+    if budget < 60000:
+        psu_reserve = 3500 
+    elif budget < 100000:
+        psu_reserve = 5000 
+    else:
+        psu_reserve = budget * 0.10
+
+    # 6. GPU (Spend whatever is left MINUS the PSU reserve)
     gpu = None
-    if remaining > 10000:
-        gpu = get_best_item(cursor, "gpus", remaining)
+    gpu_budget = remaining - psu_reserve # Safe budget for GPU
+
+    if gpu_budget > 10000:
+        gpu = get_best_item(cursor, "gpus", gpu_budget)
         if gpu: 
             remaining -= gpu['price']
             parts['Graphics Card'] = gpu
 
-    # --- PHASE 2: SAFETY & PSU ---
-    # We use the same Wattage Logic here for safety
+    # --- PHASE 3: SAFETY & PSU BUYING ---
     estimated_watts = calculate_estimated_wattage(parts)
-    recommended_psu_watts = estimated_watts + 150 # Add 150W headroom for safety
-
-    # --- SMART BUDGET CAP (The Fix) ---
-    # Don't spend 10% blindly. Cap it for mid-range builds.
-    if budget < 60000:
-        psu_cap = 3500  # Enough for 450W decent PSU
-    elif budget < 100000:
-        psu_cap = 5000  # Enough for 550W/650W Bronze
-    else:
-        psu_cap = budget * 0.10 # Unlock premium budget for high-end builds
+    recommended_psu_watts = estimated_watts + 150 # Safety Buffer
     
-    # Try to find the BEST PSU that fits in our SMART CAP
-    psu = get_best_item(cursor, "psus", psu_cap, min_watts=recommended_psu_watts)
+    # Now we buy the PSU using the money we reserved + any leftovers from GPU
+    # We use 'remaining' here because it holds (Reserve + GPU Savings)
+    psu = get_best_item(cursor, "psus", remaining, min_watts=recommended_psu_watts)
     
-    # Fallback 1: If Smart Cap was too tight, try the cheapest SAFE option (ignore cap)
+    # Fallback if reserve was slightly too tight
     if not psu:
         psu = get_cheapest_item(cursor, "psus", min_watts=recommended_psu_watts)
-        
-    # Fallback 2: If still nothing (very rare), just get best available
+    
+    # Final Fallback
     if not psu:
-         psu = get_best_item(cursor, "psus", budget * 0.10) 
+         psu = get_best_item(cursor, "psus", remaining) 
 
     if psu: 
         remaining -= psu['price']
         parts['Power Supply'] = psu
 
-    # --- PHASE 3: BUDGET SWEEPER ---
+    # --- PHASE 4: BUDGET SWEEPER ---
     upgrade_order = [
         ('Graphics Card', 'gpus', None),
         ('CPU', 'processors', None),
@@ -200,13 +211,15 @@ def generate_pc_build(budget):
             current_item = parts[part_name]
             current_price = current_item['price']
             potential_budget = current_price + remaining
+            
             better_item = get_best_item(cursor, table, potential_budget, constraint)
+            
             if better_item and better_item['price'] > current_price:
                 cost_diff = better_item['price'] - current_price
                 parts[part_name] = better_item
                 remaining -= cost_diff
 
-    # Recalculate watts after upgrades
+    # Final Wattage Calculation
     final_watts = calculate_estimated_wattage(parts)
     
     conn.close()
