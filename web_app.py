@@ -55,12 +55,21 @@ def is_gpu_mandatory(cpu_name):
          return True
     return False
 
-# --- HELPER: BOTTLENECK CALCULATOR ---
+# --- HELPER: BOTTLENECK CALCULATOR (NEW) ---
 def check_bottleneck(cpu_price, gpu_price):
+    """Checks if the GPU is too weak for the CPU"""
     if gpu_price == 0: return None
+    
+    # Calculate Ratio: GPU Price / CPU Price
     ratio = gpu_price / cpu_price
-    if ratio < 0.4:
-        return "⚠️ **Bottleneck:** GPU is too weak for this CPU."
+    
+    # Logic: A balanced gaming PC usually has a GPU that is 1x-2x the CPU price.
+    # If GPU is < 50% of CPU price, it's likely a bottleneck for gaming.
+    if ratio < 0.5:
+        return f"⚠️ **Potential Bottleneck:** Your GPU ({gpu_price}৳) is significantly weaker than your CPU ({cpu_price}৳). For better gaming performance, consider spending more on the GPU."
+    elif ratio < 0.8:
+        return f"ℹ️ **Tip:** Your GPU is slightly underpowered for this CPU. It's okay for general use, but a better GPU would maximize gaming FPS."
+    
     return None
 
 # --- HELPER: POWER BREAKDOWN ---
@@ -190,15 +199,14 @@ def generate_pc_build(budget, include_gpu=True, fixed_cpu=None):
         # --- PHASE 2: BUDGET ALLOCATION ---
         cash_left = remaining
         
-        # Squeeze Logic: If cash is low (<45k) but GPU is needed
+        # Smart Squeeze Allocations
         mobo_alloc = 0.20
         ram_alloc = 0.10
         ssd_alloc = 0.10
         
-        # If CPU is expensive but budget is tight, squeeze harder
         should_buy_gpu = include_gpu or gpu_required
         if should_buy_gpu and cash_left < 45000:
-             mobo_alloc = 0.25 # Lower allocation (relative to cash_left)
+             mobo_alloc = 0.25 
              ram_alloc = 0.10
              ssd_alloc = 0.10
         
@@ -235,7 +243,7 @@ def generate_pc_build(budget, include_gpu=True, fixed_cpu=None):
     if casing: remaining -= casing['price']; parts['Casing'] = dict(casing)
 
     # --- PHASE 4: GPU & PSU ---
-    advice_msg = None # Stores the advice for the user
+    advice_msg = None 
 
     if should_buy_gpu:
         if budget < 60000: psu_reserve = 3500 
@@ -245,25 +253,14 @@ def generate_pc_build(budget, include_gpu=True, fixed_cpu=None):
         gpu = None
         gpu_budget = remaining - psu_reserve 
         
-        # THE ADVISOR LOGIC 💡
-        # If we have money for ANY GPU, we buy it first.
         if gpu_budget > 5000:
             gpu = get_best_item(cursor, "gpus", gpu_budget)
             if gpu: 
                 remaining -= gpu['price']
                 parts['Graphics Card'] = dict(gpu)
-                
-                # Check for severe imbalance
-                if gpu['price'] < (parts['CPU']['price'] * 0.5):
-                    needed = int((parts['CPU']['price'] * 0.8) - gpu['price'])
-                    advice_msg = f"💡 **Advisor:** This GPU is weak for your CPU. Consider **increasing budget by {needed} BDT** for a balanced card."
-                    if not gpu_required:
-                         advice_msg += " OR **Uncheck 'Include GPU'** to use Integrated Graphics and save for later."
-
         else:
-            # We CANNOT afford a GPU.
             if gpu_required:
-                needed = 15000 - gpu_budget # Aim for at least 15k
+                needed = 15000 - gpu_budget 
                 advice_msg = f"❌ **Budget Crisis:** Cannot afford a dedicated GPU for this CPU! **Please add ~{int(needed)} BDT** to your budget."
             else:
                 advice_msg = "💡 **Advisor:** Budget is too tight for a decent GPU. We skipped it. Use the CPU's Integrated Graphics and save up!"
@@ -293,14 +290,21 @@ def generate_pc_build(budget, include_gpu=True, fixed_cpu=None):
                     cost_diff = better_item['price'] - current_price
                     parts[part_name] = dict(better_item)
                     remaining -= cost_diff
+    
+    # --- PHASE 6: BOTTLENECK CHECK ---
+    # Only run if we have both CPU and GPU
+    if 'Graphics Card' in parts and 'CPU' in parts:
+        # If advice_msg isn't already set (don't overwrite critical errors)
+        if not advice_msg:
+             advice_msg = check_bottleneck(parts['CPU']['price'], parts['Graphics Card']['price'])
 
     final_breakdown = calculate_power_breakdown(parts)
     conn.close()
     return parts, sum(p['price'] for p in parts.values()), remaining, final_breakdown, gpu_required, advice_msg
 
 # --- UI START ---
-st.title("🖥️ BD PC Builder AI v9.1")
-st.caption("Smart Advisor. Budget Crisis Detection.")
+st.title("🖥️ BD PC Builder AI v10.0")
+st.caption("Expert Mode. Bottleneck Prevention. Smart Advisor.")
 
 query_params = st.query_params
 safe_budget = 40000
@@ -311,7 +315,7 @@ if "budget" in query_params:
 with st.container():
     col1, col2 = st.columns([1, 1])
     with col1:
-        budget_input = st.number_input("💰 Budget (BDT)", min_value=15000, max_value=800000, step=1000, value=safe_budget, key="budget_v9")
+        budget_input = st.number_input("💰 Budget (BDT)", min_value=15000, max_value=800000, step=1000, value=safe_budget, key="budget_v10")
     with col2:
         cpu_choice_mode = st.radio("CPU Selection:", ["🤖 AI Decides", "🎯 I Choose"], horizontal=True)
 
@@ -352,16 +356,17 @@ if st.session_state.build_results:
     
     if parts:
         st.divider()
+        
         # --- SMART ADVICE SECTION ---
         if data.get("advice"):
-             # If it's a Crisis/Warning
-             if "Crisis" in data["advice"] or "Bottleneck" in data["advice"]:
-                 st.error(data["advice"])
+             # Detect severity of the message
+             if "Bottleneck" in data["advice"] or "Crisis" in data["advice"]:
+                 st.warning(data["advice"])
              else:
                  st.info(data["advice"])
                  
         if data.get("gpu_forced") and not is_locked:
-             st.warning("⚠️ GPU was added automatically because the AI selected a CPU without Integrated Graphics.")
+             st.info("ℹ️ GPU was added automatically because the AI selected a CPU without Integrated Graphics.")
              
         col_res1, col_res2, col_res3 = st.columns([2, 1, 1])
         with col_res1: st.success(f"✅ Total: **{current_total} BDT**")
@@ -404,7 +409,6 @@ if st.session_state.build_results:
                     st.markdown(f"**{item['price']} ৳**")
                     if item.get('url'): st.link_button("🛒", f"{item['url']}?ref=YOUR_ID")
                 with col_action:
-                    # DISABLE SWAP FOR CPU IF USER FIXED IT
                     if part_type == 'CPU' and cpu_choice_mode == "🎯 I Choose":
                         st.write("🔒") 
                     else:
